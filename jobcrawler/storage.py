@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     timezone      TEXT,
     area          TEXT,
     junior_signal TEXT,
+    note          TEXT,
     source_level  TEXT,
     tags          TEXT,
     salary        TEXT,
@@ -66,6 +67,10 @@ class JobStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            # Migração: bancos criados antes da coluna `note` existir
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+            if "note" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN note TEXT")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -97,10 +102,10 @@ class JobStore:
                     continue
                 conn.execute(
                     """INSERT INTO jobs (fingerprint, title, company, url, source, sources,
-                           location, regions, timezone, area, junior_signal, source_level,
+                           location, regions, timezone, area, junior_signal, note, source_level,
                            tags, salary, published_at, description, first_seen, last_seen)
                        VALUES (:fingerprint, :title, :company, :url, :source, :sources,
-                           :location, :regions, :timezone, :area, :junior_signal, :source_level,
+                           :location, :regions, :timezone, :area, :junior_signal, :note, :source_level,
                            :tags, :salary, :published_at, :description, :first_seen, :last_seen)""",
                     {**rec, "sources": json.dumps([job.source]), "first_seen": now, "last_seen": now},
                 )

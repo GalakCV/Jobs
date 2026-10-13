@@ -8,6 +8,7 @@ Exemplos:
   python -m jobcrawler run --sources himalayas,jobicy --dry-run
   python -m jobcrawler run --loop-hours 6        # repete a cada 6h (Ctrl+C para sair)
   python -m jobcrawler list --days 3             # vagas encontradas nos últimos 3 dias
+  python -m jobcrawler import linkedin_vagas.json  # importa vagas de um JSON
   python -m jobcrawler check "Junior DevOps Engineer" --location "USA"
 """
 
@@ -81,6 +82,50 @@ def _cmd_report(args, cfg) -> int:
     return 0
 
 
+def _cmd_import(args, cfg) -> int:
+    """Importa vagas de um JSON (ex.: coletadas manualmente ou pelo navegador)."""
+    import json
+
+    from jobcrawler.filters import FilterConfig, JobFilter
+    from jobcrawler.models import Job
+    from jobcrawler.storage import JobStore
+
+    data = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    items = data.get("jobs", []) if isinstance(data, dict) else data
+    fields = Job.__dataclass_fields__
+    job_filter = JobFilter(FilterConfig.from_dict(cfg["filters"]))
+    accepted, rejected, invalid = [], [], 0
+    for item in items:
+        kw = {k: v for k, v in item.items() if k in fields}
+        for key in ("tags", "regions"):
+            if isinstance(kw.get(key), str):
+                kw[key] = [x.strip() for x in kw[key].split(",") if x.strip()]
+        try:
+            job = Job(**kw)
+        except TypeError:
+            invalid += 1
+            continue
+        if not job.is_valid():
+            invalid += 1
+            continue
+        if args.no_filter:
+            accepted.append(job)
+            continue
+        decision = job_filter.apply(job)
+        if decision.accepted:
+            accepted.append(job)
+        else:
+            rejected.append((job, decision.reason))
+
+    new = JobStore(cfg["storage"]["database"]).upsert(accepted)
+    print(f"{len(items)} no arquivo: {len(accepted)} aceitas ({len(new)} novas no banco), "
+          f"{len(rejected)} descartadas pelo filtro, {invalid} inválidas.")
+    for job, reason in rejected[:10]:
+        print(f"  descartada: {job.title} — {reason}")
+    print("Rode `python -m jobcrawler report --open` para ver tudo junto.")
+    return 0
+
+
 def _cmd_list(args, cfg) -> int:
     from jobcrawler.storage import JobStore
 
@@ -137,6 +182,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--output", help="caminho do arquivo (padrão: output/report.html)")
     p_report.add_argument("--open", action="store_true", help="abre no navegador")
     p_report.set_defaults(func=_cmd_report)
+
+    p_import = sub.add_parser("import", help="importa vagas de um arquivo JSON para o banco")
+    p_import.add_argument("file", help="JSON: lista de vagas ou {'jobs': [...]}")
+    p_import.add_argument("--no-filter", action="store_true",
+                          help="grava sem passar pelo filtro (não recomendado)")
+    p_import.set_defaults(func=_cmd_import)
 
     p_list = sub.add_parser("list", help="lista vagas salvas no banco")
     p_list.add_argument("--days", type=int, default=7)

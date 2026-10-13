@@ -115,17 +115,22 @@ _US_STATE_CODES = {
     "VA", "WA", "WV", "WI", "WY", "DC",
 }
 _REGION_PATTERNS: dict[str, re.Pattern] = {
-    "US": re.compile(_B + r"(?:united states|usa|u\.s\.a?\.?|us|"
-                     r"(?<!latin )(?<!south )(?<!central )america|" + _US_STATES + r")" + _E),
+    # Inclui grafias em português/espanhol: sites como o LinkedIn localizam o
+    # texto pelo idioma do navegador ("Estados Unidos", "Ilinóis", "Tenessi").
+    "US": re.compile(_B + r"(?:united states|usa|u\.s\.a?\.?|us|estados unidos|eua|ee\.?\s?uu\.?|"
+                     r"(?<!latin )(?<!south )(?<!central )america|" + _US_STATES + r"|"
+                     r"tenessi|minesota|ilinois|pensilvania|carolina do (?:norte|sul)|"
+                     r"nova (?:iorque|jersey)|luisiana|havai|distrito de columbia)" + _E),
     "CA": re.compile(_B + r"(?:canada|canadian|ontario|toronto|vancouver|british columbia|"
                      r"quebec|alberta|montreal|calgary|ottawa)" + _E),
     "AU": re.compile(_B + r"(?:australia|australian|aus|sydney|melbourne|brisbane|perth|"
                      r"adelaide|canberra|anz|oceania)" + _E),
-    "NA": re.compile(_B + r"(?:north america|americas|us\s*(?:/|&|and|or)\s*canada)" + _E),
+    "NA": re.compile(_B + r"(?:north america|america do norte|americas|us\s*(?:/|&|and|or)\s*canada)" + _E),
     "APAC": re.compile(_B + r"(?:apac|asia[- ]pacific)" + _E),
     "GLOBAL": re.compile(_B + r"(?:worldwide|anywhere|global|globally|international|"
                          r"all countries|any location|no location restrictions?|"
-                         r"remote anywhere|work from anywhere)" + _E),
+                         r"remote anywhere|work from anywhere|"
+                         r"mundo todo|qualquer lugar|global remoto|todo el mundo)" + _E),
 }
 _STATE_CODE_SUFFIX = re.compile(r",\s*([A-Z]{2})\b")
 

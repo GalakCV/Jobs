@@ -103,6 +103,7 @@ def _row(rec: dict) -> str:
     {region_tags}
   </div>
   {'<div class="facts">' + ''.join(facts) + '</div>' if facts else ''}
+  {f'<p class="note">{_e(rec["note"])}</p>' if rec.get("note") else ''}
   <div class="job-foot">
     <span class="source">via {_e(rec.get('source'))}</span>
     {details}
@@ -231,6 +232,8 @@ TEMPLATE = """<!doctype html>
   --infra: #A8620C;
   --new-bg: #16213A;
   --new-ink: #FFFFFF;
+  --note-bg: #FFF3D6;
+  --note-ink: #5C3B00;
   color-scheme: light;
 }}
 @media (prefers-color-scheme: dark) {{
@@ -246,6 +249,8 @@ TEMPLATE = """<!doctype html>
     --infra: #E7A24A;
     --new-bg: #E6ECF5;
     --new-ink: #0F1A2E;
+    --note-bg: #3A2E14;
+    --note-ink: #F5D99A;
     color-scheme: dark;
   }}
 }}
@@ -264,7 +269,7 @@ header h1 {{ font-size: 2rem; line-height: 1.15; margin: 0 0 8px; letter-spacing
 /* Barra de áreas: proporção + filtro */
 .areabar {{ display: flex; gap: 3px; height: 56px; margin-bottom: 20px; }}
 .seg {{
-  flex-basis: 0; min-width: 120px; border: 0; border-radius: 4px; cursor: pointer;
+  flex-basis: 0; min-width: 160px; white-space: nowrap; border: 0; border-radius: 4px; cursor: pointer;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 0 14px; color: #fff; font: inherit; font-weight: 700; text-align: left;
   transition: opacity .15s;
@@ -317,6 +322,8 @@ a.title:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
 .region {{ font-size: .8125rem; border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; }}
 .facts {{ display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; font-size: .9375rem; }}
 .k {{ color: var(--muted); }}
+.note {{ margin: 8px 0 0; padding: 6px 10px; font-size: .9375rem; max-width: 72ch;
+  background: var(--note-bg); color: var(--note-ink); border-radius: 4px; }}
 .job-foot {{ display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; margin-top: 8px;
   font-size: .875rem; color: var(--muted); }}
 .excerpt summary {{ cursor: pointer; color: var(--focus); }}

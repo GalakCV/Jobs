@@ -97,3 +97,29 @@ def test_notifications_marked_only_on_success(cfg, monkeypatch):
     assert s1.notified == 1 and len(sent) == 1
     s2 = pipeline.run(cfg)           # já notificada: não reenvia
     assert s2.notified == 0 and len(sent) == 1
+
+
+def test_import_command_filters_and_merges(cfg, tmp_path, monkeypatch):
+    """`import` passa o JSON pelo filtro, grava no banco e o `report` inclui as vagas."""
+    import yaml
+
+    from jobcrawler.cli import main
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    payload = [
+        {"source": "linkedin", "title": "Junior Cloud Engineer", "company": "Koniag",
+         "url": "https://www.linkedin.com/jobs/view/1", "location": "Washington, Estados Unidos",
+         "note": "Remoto não confirmado"},
+        {"source": "linkedin", "title": "Senior SRE", "company": "X",
+         "url": "https://www.linkedin.com/jobs/view/2", "location": "USA"},
+        {"source": "linkedin", "title": "", "company": "Y", "url": "not-a-url"},
+    ]
+    data_file = tmp_path / "li.json"
+    data_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert main(["-c", str(cfg_path), "import", str(data_file)]) == 0
+    assert main(["-c", str(cfg_path), "report", "--output", str(tmp_path / "r.html")]) == 0
+    html = (tmp_path / "r.html").read_text(encoding="utf-8")
+    assert "Junior Cloud Engineer" in html and "Remoto não confirmado" in html
+    assert "Senior SRE" not in html

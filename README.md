@@ -35,7 +35,9 @@ Todas as fontes oficiais pedem atribuição: cada vaga salva mantém o link orig
 
 - **Indeed**: não tem mais API pública (o programa Publisher foi encerrado) e usa proteção anti-bot agressiva. Um scraper ali quebraria toda semana e exigiria técnicas de evasão que este projeto deliberadamente não usa.
 - **Remote.co**: não oferece API nem RSS. Seletores HTML "chutados" seriam código quebrado; se você quiser adicioná-lo, veja a seção *Adicionar uma fonte nova*.
-- **LinkedIn**: implementado, mas **desligado**. Os Termos de Uso do LinkedIn proíbem coleta automatizada e o site bloqueia IPs rapidamente. Se ligar (`sources.linkedin.enabled: true`), use em volume baixo e por sua conta e risco. Ao primeiro bloqueio a fonte é pulada; o código não tenta contornar.
+- **LinkedIn**: o filtro de "remoto" da busca de visitante não é confiável (vagas híbridas aparecem nele), e o LinkedIn passa a responder HTTP 429 depois de poucas consultas. Vagas vindas de lá devem ser conferidas uma a uma; use o campo `note` do JSON de importação para marcar isso no relatório. O adaptador do crawler está implementado, mas **desligado**.
+- **Localização em português**: sites que traduzem a localização ("Estados Unidos", "Ilinóis", "Austrália") são reconhecidos pelo classificador de regiões.
+- **LinkedIn (adaptador)**: implementado, mas **desligado**. Os Termos de Uso do LinkedIn proíbem coleta automatizada e o site bloqueia IPs rapidamente. Se ligar (`sources.linkedin.enabled: true`), use em volume baixo e por sua conta e risco. Ao primeiro bloqueio a fonte é pulada; o código não tenta contornar.
 
 ---
 
@@ -84,6 +86,10 @@ python -m jobcrawler run --loop-hours 6
 
 # Ver vagas encontradas nos últimos 3 dias
 python -m jobcrawler list --days 3
+
+# Importar vagas de um JSON (ex.: linkedin_vagas.json) para o banco;
+# elas passam pelo seu filtro e aparecem no próximo `report`
+python -m jobcrawler import linkedin_vagas.json
 
 # Testar o filtro com um título, sem acessar a rede
 python -m jobcrawler check "Junior Cloud Security Engineer" --location "Remote - Canada"
@@ -234,7 +240,7 @@ remote-junior-jobs/
 │   ├── html_report.py       # relatório HTML (template + escape)
 │   ├── notifiers.py         # Discord / Telegram / Notion
 │   └── sources/             # um arquivo por fonte
-└── tests/                   # 100 testes, rodam sem internet
+└── tests/                   # 107 testes, rodam sem internet
 ```
 
 ## Adicionar uma fonte nova

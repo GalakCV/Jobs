@@ -29,6 +29,7 @@ class Job:
     area: str = ""              # security | devops_sre_platform | infra_cloud_sysadmin
     regions: list[str] = field(default_factory=list)   # US, CA, AU, GLOBAL...
     junior_signal: str = ""     # o que tornou a vaga "explicitamente júnior"
+    note: str = ""              # aviso para quem lê (ex.: "remoto não confirmado")
 
     def __post_init__(self) -> None:
         self.title = clean_ws(self.title)
