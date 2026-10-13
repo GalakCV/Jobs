@@ -150,7 +150,8 @@ def test_rio_profile_end_to_end(rio_config_dict, tmp_path, monkeypatch):
                                                    "Analista de Segurança da Informação Jr"}
     out = tmp_path / "out"
     html = (out / "jobs_latest.html").read_text(encoding="utf-8")
-    assert "<h1>Vagas híbridas no Rio</h1>" in html and 'data-region="Niterói"' in html
+    assert "<h1>Vagas júnior em Segurança, DevOps e Infra</h1>" in html
+    assert 'data-region="Niterói"' in html
     csv_text = (out / "jobs_latest.csv").read_text(encoding="utf-8-sig")
     assert "Modalidade" in csv_text.splitlines()[0] and "Híbrido" in csv_text
 

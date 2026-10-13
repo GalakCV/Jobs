@@ -13,7 +13,7 @@ Ordem das verificações (a primeira reprovação encerra):
   6. Descrição: frases de nível / anos de experiência (ou modo strict)
   7. Marcador júnior explícito (título, fonte ou, se habilitado, descrição)
   8. Localização: cidades-alvo (modo "cities") ou regiões US/CA/AU/Global
-     (modo "regions", usado pelo config.remoto.yaml)
+     (modo "regions", usado pelo perfil remoto)
 """
 
 from __future__ import annotations

@@ -3,6 +3,7 @@
 Exemplos:
   python -m jobcrawler run                       # execução completa
   python -m jobcrawler run --open                # + abre o relatório HTML no navegador
+  python -m jobcrawler run --profile rio         # só um dos perfis do config
   python -m jobcrawler report --days 14 --open   # HTML com o histórico do banco
   python -m jobcrawler run --explain             # + rejections.csv com motivos
   python -m jobcrawler run --sources himalayas,jobicy --dry-run
@@ -30,9 +31,10 @@ def _cmd_run(args, cfg) -> int:
     from jobcrawler.pipeline import run
 
     only = [s.strip() for s in args.sources.split(",")] if args.sources else None
+    profiles = [p.strip() for p in args.profile.split(",")] if args.profile else None
     while True:
         summary = run(cfg, only=only, dry_run=args.dry_run, notify=not args.no_notify,
-                      explain=args.explain, use_cache=not args.no_cache)
+                      explain=args.explain, use_cache=not args.no_cache, profiles_only=profiles)
         if summary.new:
             print(f"\n{len(summary.new)} vaga(s) nova(s):")
             for job in summary.new:
@@ -68,6 +70,7 @@ def _cmd_report(args, cfg) -> int:
     from datetime import datetime, timedelta, timezone
 
     from jobcrawler.html_report import write_html
+    from jobcrawler.profiles import profile_labels
     from jobcrawler.storage import JobStore
 
     rows = JobStore(cfg["storage"]["database"]).recent(args.days)
@@ -76,7 +79,8 @@ def _cmd_report(args, cfg) -> int:
         r["is_new"] = (r.get("first_seen") or "") >= cutoff
     out = Path(args.output) if args.output else Path(cfg["storage"]["output_dir"]) / "report.html"
     write_html(out, rows, {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                           "report": cfg.get("report") or {}})
+                           "report": cfg.get("report") or {},
+                           "profiles": profile_labels(cfg)})
     print(f"{len(rows)} vaga(s) dos últimos {args.days} dia(s) em {out}")
     if args.open:
         _open_in_browser(out)
@@ -87,14 +91,14 @@ def _cmd_import(args, cfg) -> int:
     """Importa vagas de um JSON (ex.: coletadas manualmente ou pelo navegador)."""
     import json
 
-    from jobcrawler.filters import FilterConfig, JobFilter
     from jobcrawler.models import Job
+    from jobcrawler.profiles import build_profiles, evaluate_any
     from jobcrawler.storage import JobStore
 
     data = json.loads(Path(args.file).read_text(encoding="utf-8"))
     items = data.get("jobs", []) if isinstance(data, dict) else data
     fields = Job.__dataclass_fields__
-    job_filter = JobFilter(FilterConfig.from_dict(cfg["filters"]))
+    profiles = build_profiles(cfg)
     accepted, rejected, invalid = [], [], 0
     for item in items:
         kw = {k: v for k, v in item.items() if k in fields}
@@ -113,7 +117,7 @@ def _cmd_import(args, cfg) -> int:
         if args.no_filter:
             accepted.append(job)
             continue
-        decision = job_filter.apply(job)
+        _, decision = evaluate_any(profiles, job)
         if decision.accepted:
             accepted.append(job)
         else:
@@ -144,30 +148,33 @@ def _cmd_list(args, cfg) -> int:
 
 
 def _cmd_check(args, cfg) -> int:
-    """Testa o filtro com um título fictício, sem rede. Útil para ajustar o config."""
-    from jobcrawler.filters import FilterConfig, JobFilter
+    """Testa o filtro com um título fictício em cada perfil, sem rede."""
+    from jobcrawler.filters import WORKPLACE_LABELS
     from jobcrawler.models import Job
+    from jobcrawler.profiles import build_profiles
 
     description = Path(args.description_file).read_text(encoding="utf-8") if args.description_file else ""
-    job = Job(source="manual", title=args.title, company="Teste", url="https://example.com",
-              location=args.location, description=description, source_level=args.level,
-              workplace=args.workplace)
-    decision = JobFilter(FilterConfig.from_dict(cfg["filters"])).evaluate(job)
-    status = "ACEITA" if decision.accepted else "DESCARTADA"
-    print(f"{status} | etapa: {decision.stage} | motivo: {decision.reason}")
-    if decision.accepted:
-        from jobcrawler.filters import WORKPLACE_LABELS
-        print(f"área: {decision.area} | júnior por: {decision.junior_signal} | "
-              f"local: {', '.join(decision.regions)} | "
-              f"modalidade: {WORKPLACE_LABELS.get(decision.workplace, 'não informada')}")
-        for note in decision.notes:
-            print(f"aviso: {note}")
-    return 0 if decision.accepted else 1
+    any_accepted = False
+    for profile in build_profiles(cfg, [args.profile] if args.profile else None):
+        job = Job(source="manual", title=args.title, company="Teste", url="https://example.com",
+                  location=args.location, description=description, source_level=args.level,
+                  workplace=args.workplace)
+        decision = profile.job_filter.evaluate(job)
+        any_accepted |= decision.accepted
+        status = "ACEITA" if decision.accepted else "DESCARTADA"
+        print(f"[{profile.label}] {status} | etapa: {decision.stage} | motivo: {decision.reason}")
+        if decision.accepted:
+            print(f"    área: {decision.area} | júnior por: {decision.junior_signal} | "
+                  f"local: {', '.join(decision.regions)} | "
+                  f"modalidade: {WORKPLACE_LABELS.get(decision.workplace, 'não informada')}")
+            for note in decision.notes:
+                print(f"    aviso: {note}")
+    return 0 if any_accepted else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jobcrawler",
-                                     description="Crawler de vagas remotas JÚNIOR em DevOps, Security e Infra")
+                                     description="Crawler de vagas JÚNIOR em Segurança, DevOps e Infra")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-c", "--config", default="config.yaml", help="caminho do config.yaml")
     parser.add_argument("-v", "--verbose", action="store_true", help="log DEBUG (mostra cada decisão)")
@@ -175,6 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="coleta, filtra, salva, exporta e notifica")
     p_run.add_argument("--sources", help="lista separada por vírgula (ignora 'enabled' do config)")
+    p_run.add_argument("--profile", help="só estes perfis, separados por vírgula (ex.: rio)")
     p_run.add_argument("--dry-run", action="store_true", help="não grava no banco nem notifica")
     p_run.add_argument("--no-notify", action="store_true", help="não envia notificações")
     p_run.add_argument("--no-cache", action="store_true", help="ignora o cache HTTP em disco")
@@ -206,6 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument("--location", default="")
     p_check.add_argument("--level", default="", help="senioridade declarada pela fonte")
     p_check.add_argument("--workplace", default="", help="modalidade da fonte: hybrid, onsite, remote")
+    p_check.add_argument("--profile", help="testa só neste perfil")
     p_check.add_argument("--description-file", help="arquivo .txt com a descrição")
     p_check.set_defaults(func=_cmd_check)
     return parser

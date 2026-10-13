@@ -1,12 +1,16 @@
 # =============================================================================
-# PERFIL RIO: vagas HÍBRIDAS júnior de Segurança, DevOps e Infra no Rio de Janeiro.
-# Uso: python -m jobcrawler run --open
-# (para o perfil antigo de vagas remotas: -c config.remoto.yaml)
+# Crawler de vagas JÚNIOR em Segurança, DevOps e Infra.
 #
-# Todos os termos abaixo são fragmentos de REGEX aplicados sobre texto
-# normalizado: minúsculo e SEM acentos ("Sênior" vira "senior", "Segurança"
-# vira "seguranca"). Limites de palavra são adicionados automaticamente, então
-# "sr" NÃO casa com "sre" e "pl" NÃO casa com "pl/sql".
+# Roda DOIS perfis de busca na mesma execução e junta tudo num relatório só:
+#   rio     -> vagas HÍBRIDAS no Rio de Janeiro e região metropolitana
+#   remoto  -> vagas 100% REMOTAS em EUA, Canadá, Austrália e globais
+#
+# Uso:  python -m jobcrawler run --open
+#       python -m jobcrawler run --profile rio      (só um perfil)
+#
+# Termos de filtro são fragmentos de REGEX aplicados sobre texto normalizado:
+# minúsculo e SEM acentos ("Sênior" vira "senior"). Limites de palavra são
+# automáticos: "sr" NÃO casa com "sre" e "pl" NÃO casa com "pl/sql".
 # Termo com ": " (dois-pontos e espaço) precisa de aspas no YAML.
 # =============================================================================
 
@@ -28,13 +32,84 @@ http:
   cache_ttl_minutes: 60             # cache em disco para não martelar as APIs
   cache_dir: .cache/http
 
-# -----------------------------------------------------------------------------
-# Fontes
-# -----------------------------------------------------------------------------
+# =============================================================================
+# PERFIS: cada um diz quais fontes usa e o que muda no filtro em relação à
+# seção `filters` (lá embaixo), que vale para todos.
+# =============================================================================
+profiles:
+  rio:
+    label: Híbridas no Rio
+    sources: [gupy, github_issues, linkedin]
+    filters:
+      # ---- Modalidade ----
+      workplace_types: [hybrid]         # hybrid | onsite | remote (pode combinar)
+      unknown_workplace: keep           # keep = entra com aviso; reject = descarta
+      workplace_from_description: true  # "modelo híbrido", "3x por semana no escritório"
+
+      # ---- Localização ----
+      location_mode: cities
+      target_cities:
+        # Cidade-alvo e apelidos/bairros que aparecem no lugar do nome da cidade.
+        "Rio de Janeiro":
+          - rio
+          - barra da tijuca
+          - recreio dos bandeirantes
+          - centro do rio
+          - botafogo
+          - copacabana
+          - ipanema
+          - leblon
+          - flamengo
+          - tijuca
+          - meier
+          - jacarepagua
+          - sao cristovao
+          - ilha do fundao
+          - ilha do governador
+          - cidade nova
+          - porto maravilha
+          - campo grande
+      include_metro: true               # false = só a capital
+      metro_cities:
+        - Niterói
+        - São Gonçalo
+        - Duque de Caxias
+        - Nova Iguaçu
+        - Belford Roxo
+        - São João de Meriti
+        - Nilópolis
+        - Mesquita
+        - Queimados
+        - Itaboraí
+        - Maricá
+        - Itaguaí
+        - Seropédica
+        - Magé
+      target_state:
+        label: RJ
+        names: [rj, rio de janeiro, estado do rio de janeiro]
+      accept_state_only: true           # "[RJ]" sem cidade entra com aviso
+      allow_unknown_location: false     # sem localização nenhuma: descarta
+
+  remoto:
+    label: Remotas no exterior
+    sources: [himalayas, jobicy, remotive, remoteok, weworkremotely]
+    filters:
+      workplace_types: [remote]         # descarta híbrido/presencial detectados
+      unknown_workplace: keep           # nestes sites, "não informado" = remoto
+      workplace_from_description: true
+      location_mode: regions
+      accepted_regions: [US, CA, AU, GLOBAL]
+      accept_apac_as_au: true           # "APAC" inclui Austrália
+      allow_unknown_location: true      # vaga sem localização passa (marcada)
+
+# =============================================================================
+# FONTES (definidas uma vez; os perfis acima dizem qual usa qual)
+# =============================================================================
 sources:
-  # Gupy: principal ATS do Brasil (Globo, Stone, Vale, bancos, varejo...).
-  # A API pública do portal informa cidade, estado e modalidade (workplaceType),
-  # então a modalidade das vagas do Gupy é confiável.
+  # ---------------- Brasil ----------------
+  # Gupy: principal ATS do Brasil. A API pública do portal informa cidade,
+  # estado e modalidade (workplaceType), então a modalidade é confiável.
   gupy:
     enabled: true
     page_size: 50
@@ -79,73 +154,42 @@ sources:
     max_pages: 1
     min_delay_seconds: 6
 
-  # Fontes internacionais de vagas remotas: só fazem sentido no
-  # config.remoto.yaml. Aqui ficam desligadas.
-  himalayas: {enabled: false}
-  jobicy: {enabled: false}
-  remotive: {enabled: false}
-  remoteok: {enabled: false}
-  weworkremotely: {enabled: false}
+  # ---------------- Exterior (remotas) ----------------
+  himalayas:
+    enabled: true
+    seniority: Entry-level          # filtro do próprio Himalayas
+    max_pages: 3
+    queries: [devops, "site reliability", "platform engineer", security,
+              "soc analyst", cybersecurity, cloud, "system administrator",
+              infrastructure, "it support"]
 
-# -----------------------------------------------------------------------------
-# Motor de filtragem
-# -----------------------------------------------------------------------------
+  jobicy:
+    enabled: true
+    industries: [admin, cybersecurity, technical-support]   # admin = DevOps & Infra
+    count: 100
+    max_pages: 3
+
+  remotive:
+    enabled: true
+    categories: [devops]
+    searches: [junior, "entry level", security]
+    # O Remotive pede poucas chamadas por dia: o cache acima já ajuda.
+
+  remoteok:
+    enabled: true
+    tags: [devops, sysadmin, security, infosec, cloud]
+
+  weworkremotely:
+    enabled: true
+    feeds:
+      - https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss
+      - https://weworkremotely.com/remote-jobs.rss
+
+# =============================================================================
+# FILTROS COMUNS (área e senioridade, em português e inglês). Cada perfil
+# pode sobrescrever qualquer chave na sua seção `filters`.
+# =============================================================================
 filters:
-  # ---- Modalidade ----
-  workplace_types: [hybrid]         # hybrid | onsite | remote (pode combinar)
-  # Vaga sem modalidade informada: keep = entra com aviso; reject = descarta.
-  unknown_workplace: keep
-  # Procura "modelo híbrido", "3x por semana no escritório"... na descrição
-  # quando a fonte não tem um campo de modalidade.
-  workplace_from_description: true
-
-  # ---- Localização ----
-  location_mode: cities
-  target_cities:
-    # Cidade-alvo e apelidos/bairros que aparecem no lugar do nome da cidade.
-    "Rio de Janeiro":
-      - rio
-      - barra da tijuca
-      - recreio dos bandeirantes
-      - centro do rio
-      - botafogo
-      - copacabana
-      - ipanema
-      - leblon
-      - flamengo
-      - tijuca
-      - meier
-      - jacarepagua
-      - sao cristovao
-      - ilha do fundao
-      - ilha do governador
-      - cidade nova
-      - porto maravilha
-      - campo grande
-  # Região metropolitana (entra se include_metro: true; dá para filtrar por
-  # cidade no relatório).
-  include_metro: true
-  metro_cities:
-    - Niterói
-    - São Gonçalo
-    - Duque de Caxias
-    - Nova Iguaçu
-    - Belford Roxo
-    - São João de Meriti
-    - Nilópolis
-    - Mesquita
-    - Queimados
-    - Itaboraí
-    - Maricá
-    - Itaguaí
-    - Seropédica
-    - Magé
-  target_state:
-    label: RJ
-    names: [rj, rio de janeiro, estado do rio de janeiro]
-  accept_state_only: true           # "[RJ]" sem cidade entra com aviso
-  allow_unknown_location: false     # sem localização nenhuma: descarta
-
   # Ignora vagas mais antigas que N dias (0 = sem limite).
   max_age_days: 30
 
@@ -156,6 +200,7 @@ filters:
       - cyber ?security
       - cyber
       - secops
+      - sec ops
       - devsecops
       - appsec
       - application security
@@ -175,6 +220,7 @@ filters:
       - threat
       - resposta a incidentes
       - incident response
+      - detection engineer\w*
       - grc
     devops_sre_platform:
       - devops
@@ -183,6 +229,7 @@ filters:
       - site reliability
       - confiabilidade
       - platform engineer\w*
+      - platform ops
       - engenheir[oa] de plataforma
       - kubernetes
       - k8s
@@ -190,6 +237,7 @@ filters:
       - observabilidade
       - observability
       - release engineer
+      - build engineer
     infra_cloud_sysadmin:
       - infraestrutura
       - infra
@@ -200,8 +248,10 @@ filters:
       - sys admin
       - administrador de (?:sistemas|redes|servidores)
       - systems? admin\w*
+      - systems? engineer
       - linux
       - windows server
+      - windows (?:server )?admin\w*
       - redes
       - network\w*
       - telecom\w*
@@ -209,6 +259,7 @@ filters:
       - data ?cent(?:er|re)
       - noc
       - virtualizacao
+      - virtuali[sz]ation
       - suporte de ti
       - suporte tecnico
       - suporte de infraestrutura
@@ -216,6 +267,9 @@ filters:
       - tecnico de (?:ti|informatica|suporte|redes)
       - it support
       - it operations
+      - it ops
+      - it technician
+      - desktop support
       # Descomente se quiser incluir atendimento de primeiro nível:
       # - help ?desk
       # - service ?desk
@@ -242,13 +296,18 @@ filters:
     - marketing
     - recrutamento
     - recruit\w*
+    - talent acquisition
     - account (?:executive|manager)
     - atendimento ao cliente
     - customer success
+    - business development
     - designer
     - product (?:manager|owner)
+    - copywriter
+    - accountant
     - juridico
     - contab\w*
+    - solutions? consultant
 
   # ---- Senioridade ----
   # Marcadores que tornam a vaga "explicitamente júnior" (procurados no TÍTULO).
@@ -264,6 +323,8 @@ filters:
     - level ?(?:1|i)
     - l1
     - early[- ]career
+    - new[- ]grad\w*
+    - graduate
   # Também aceita "Analista de Infraestrutura I", "Engineer I" (romano I) no título.
   accept_roman_one: true
   # true  = só entra vaga com marcador júnior explícito (regra rígida).
@@ -282,11 +343,14 @@ filters:
     - aprendiz
     - jovem aprendiz
     - apprentice\w*
+    - co-?op
     # pleno / intermediário
     - pleno
     - pl(?!/)
     - mid
     - mid[- ]?level
+    - mid[- ]?senior
+    - midweight
     - intermediate
     - ii
     - iii
@@ -298,12 +362,15 @@ filters:
     - level ?(?:2|3|ii|iii)
     - l2
     - l3
+    - (?:engineer|analyst|administrator|developer|specialist) (?:2|3|4)
     # sênior e acima
     - senior
     - sr\.?
+    - snr
     - especialista
     - specialist
     - lead
+    - leader
     - lider
     - tech lead
     - principal
@@ -315,8 +382,14 @@ filters:
     - head
     - diretor\w*
     - director
+    - vp
+    - vice president
+    - chief
+    - cto
+    - ciso
     - arquitet\w*
     - architect
+    - expert
     - experienced
 
   # Descrição: "smart" descarta por frases que descrevem o nível da vaga e por
@@ -329,26 +402,34 @@ filters:
     - nivel (?:pleno|senior|especialista)
     - programa de (?:estagio|trainee)
     - vaga de estagio
-    - (?:senior|mid)[- ]level (?:role|position)
-    - this is an? (?:senior|mid[- ]level|lead) (?:role|position)
+    - internship
+    - intern (?:position|role|program\w*)
+    - summer intern\w*
+    - trainee program\w*
+    - this is an? (?:paid |unpaid )?intern\w*
+    - this is an? (?:senior|mid[- ]level|lead|principal|staff)\b
+    - (?:senior|mid)[- ]level (?:role|position|opportunity|engineer|candidate)
+    - (?:seeking|looking for|hiring) an? (?:experienced|seasoned|senior)
   junior_marker_in_description: false
-  # Usa o nível informado pela fonte (labels do GitHub, tipo de vaga do Gupy).
-  # "Estágio", "Trainee", "Pleno"... informados pela fonte sempre descartam.
+  # Usa o nível informado pela fonte (Himalayas "Entry-level", labels do
+  # GitHub, tipo de vaga do Gupy). Pleno/Sênior/Estágio da fonte sempre descartam.
   trust_source_seniority: true
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Relatório HTML
-# -----------------------------------------------------------------------------
+# =============================================================================
 report:
-  title: Vagas híbridas no Rio
-  scope: Segurança, DevOps e Infra, nível júnior, no Rio de Janeiro e região metropolitana.
+  title: Vagas júnior em Segurança, DevOps e Infra
+  scope: Híbridas no Rio de Janeiro e região, e 100% remotas em EUA, Canadá, Austrália e globais.
   footer: >-
     Cada link abre a vaga na fonte original. Vagas com aviso amarelo têm algo a conferir
-    (modalidade, cidade ou nível) antes de você se candidatar.
+    (modalidade, cidade ou nível). Vagas remotas restritas a EUA, Canadá ou Austrália
+    costumam exigir autorização de trabalho no país; as marcadas como Global tendem a ser
+    as mais viáveis a partir do Brasil.
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Notificações (credenciais vêm do arquivo .env)
-# -----------------------------------------------------------------------------
+# =============================================================================
 notifications:
   discord: false
   telegram: false

@@ -8,12 +8,14 @@ Busca vagas **júnior** em três áreas, filtra com regras rígidas e gera um re
 | DevOps / SRE / Plataforma | Engenheiro DevOps Júnior, SRE Jr, Analista de Observabilidade Júnior |
 | Infra / Cloud / Suporte | Analista de Infraestrutura Jr, Analista de Redes Júnior, Analista de Suporte N1, Analista de Infraestrutura I |
 
-O projeto tem dois perfis de busca, cada um num arquivo de configuração:
+Cada execução roda **dois perfis de busca juntos** e junta tudo num relatório só:
 
-| Perfil | Arquivo | O que procura |
+| Perfil | O que procura | Fontes |
 |---|---|---|
-| **Rio (padrão)** | `config.yaml` | Vagas **híbridas** no **Rio de Janeiro** e região metropolitana |
-| Remoto | `config.remoto.yaml` | Vagas **100% remotas** em EUA, Canadá, Austrália e globais |
+| `rio`: Híbridas no Rio | Vagas **híbridas** no **Rio de Janeiro** e região metropolitana | Gupy, GitHub, LinkedIn (opcional) |
+| `remoto`: Remotas no exterior | Vagas **100% remotas** em EUA, Canadá, Austrália e globais | Himalayas, Jobicy, Remotive, Remote OK, We Work Remotely |
+
+No relatório, um seletor no topo alterna entre **Todas**, **Híbridas no Rio** e **Remotas no exterior**.
 
 ---
 
@@ -40,11 +42,12 @@ cp .env.example .env        # opcional (Windows: copy .env.example .env)
 ## Uso
 
 ```bash
-# Busca vagas híbridas no Rio e abre o relatório no navegador
+# Busca nos dois perfis e abre o relatório no navegador
 python -m jobcrawler run --open
 
-# Mesmo processo para o perfil de vagas remotas
-python -m jobcrawler -c config.remoto.yaml run --open
+# Só um dos perfis
+python -m jobcrawler run --profile rio
+python -m jobcrawler run --profile remoto
 
 # Relatório com o histórico do banco (sem acessar a rede)
 python -m jobcrawler report --days 14 --open
@@ -67,8 +70,9 @@ python -m jobcrawler list --days 3
 # Importar vagas de um JSON para o banco (passam pelo filtro)
 python -m jobcrawler import vagas.json
 
-# Testar o filtro com um título, sem acessar a rede
+# Testar o filtro com um título em cada perfil, sem acessar a rede
 python -m jobcrawler check "Analista de SOC Júnior" --location "Niterói, RJ" --workplace hybrid
+python -m jobcrawler check "Junior DevOps Engineer" --location "Remote - USA"
 python -m jobcrawler check "Analista de Infraestrutura Jr" --location "Rio de Janeiro" --description-file descricao.txt
 
 # Log detalhado: mostra a decisão do filtro para cada vaga
@@ -79,7 +83,9 @@ Códigos de saída de `run`: `0` sucesso, `1` erro de configuração/arquivo, `2
 
 ---
 
-## Fontes do perfil Rio
+## Fontes
+
+### Perfil `rio`
 
 | Fonte | Tipo | Observação |
 |---|---|---|
@@ -95,7 +101,17 @@ Cada vaga salva mantém o link original da fonte.
 
 **Fora do escopo, e por quê:** Indeed, Catho, InfoJobs e Vagas.com não têm API pública e usam proteção anti-bot. Um scraper ali quebraria toda semana e exigiria técnicas de evasão que este projeto não usa. Para adicionar uma fonte, veja *Adicionar uma fonte nova*.
 
-As fontes do perfil remoto (Himalayas, Jobicy, Remotive, Remote OK, We Work Remotely) estão descritas no `config.remoto.yaml`.
+### Perfil `remoto`
+
+| Fonte | Tipo | Observação |
+|---|---|---|
+| [Himalayas](https://himalayas.app/api) | API JSON pública | busca com filtro `seniority=Entry-level` |
+| [Jobicy](https://jobicy.com/jobs-rss-feed) | API JSON pública | categorias DevOps & Infra, Cybersecurity, Technical Support |
+| [Remotive](https://remotive.com/api/remote-jobs) | API JSON pública | pede poucas chamadas por dia (o cache cuida disso) |
+| [Remote OK](https://remoteok.com/api) | API JSON pública | por tags: devops, sysadmin, security, infosec, cloud |
+| [We Work Remotely](https://weworkremotely.com/remote-job-rss-feed) | RSS público | categoria DevOps/Sysadmin + feed geral |
+
+Muitas vagas remotas restritas a EUA, Canadá ou Austrália exigem **autorização de trabalho no país**, mesmo sendo remotas. As marcadas como `Global` costumam ser as mais viáveis a partir do Brasil.
 
 ---
 
@@ -109,15 +125,16 @@ As fontes do perfil remoto (Himalayas, Jobicy, Remotive, Remote OK, We Work Remo
 | `output/jobs_latest.json` | o mesmo, em JSON |
 | `output/jobs_AAAAMMDD-HHMMSS.*` | cópia datada de cada execução |
 | `output/rejections.csv` | com `--explain`: etapa e motivo de cada descarte |
-| `data/jobs.db` | SQLite com o histórico (o perfil remoto usa `data/jobs_remoto.db` e `output/remoto/`) |
+| `data/jobs.db` | SQLite com o histórico dos dois perfis (coluna `profile`) |
 | `logs/crawler.log` | log rotacionado (5 arquivos de 1 MB) |
 
 ### Relatório HTML
 
 Um único arquivo, sem dependências, que abre em qualquer navegador (inclusive no celular):
 
+- Seletor de perfil: **Todas**, **Híbridas no Rio** ou **Remotas no exterior**, com contagem.
 - Barra colorida com a proporção de vagas por área; clique num segmento para filtrar.
-- Filtro por **cidade** (Rio de Janeiro, Niterói, Duque de Caxias...), busca por cargo/empresa/tecnologia e "Só novas".
+- Filtro por **local** (Rio de Janeiro, Niterói, EUA, Global...), busca por cargo/empresa/tecnologia e "Só novas".
 - Cada vaga mostra empresa, **modalidade**, cidade, por que foi considerada júnior, data relativa e um trecho da descrição.
 - **Aviso amarelo** quando algo precisa ser conferido: modalidade não informada, cidade não informada ou modalidade vinda só do filtro de busca do LinkedIn.
 - "Detalhes da execução" no rodapé: quantas vagas cada fonte trouxe, erros e por que as outras foram descartadas.
@@ -129,12 +146,12 @@ Título, escopo e rodapé do relatório ficam na seção `report` do config.
 
 ## Como o filtro funciona
 
-Tudo é configurável em `config.yaml`. O texto é normalizado antes da comparação (minúsculo e sem acentos), então `Sênior`, `Senior` e `SÊNIOR` são a mesma coisa. Os termos usam limites de palavra: `sr` **não** casa com `SRE` e `pl` **não** casa com `PL/SQL`.
+Tudo é configurável em `config.yaml`. A seção `filters` (áreas, senioridade, anos de experiência) vale para os dois perfis; cada perfil em `profiles` sobrescreve só o que muda: modalidade e localização. Uma vaga aceita por um perfil não é avaliada pelo seguinte. O texto é normalizado antes da comparação (minúsculo e sem acentos), então `Sênior`, `Senior` e `SÊNIOR` são a mesma coisa. Os termos usam limites de palavra: `sr` **não** casa com `SRE` e `pl` **não** casa com `PL/SQL`.
 
 Ordem das verificações (a primeira reprovação encerra):
 
 1. **Idade**: descarta vagas com mais de `max_age_days` (padrão 30).
-2. **Modalidade** (`workplace_types`, padrão `[hybrid]`). A modalidade vem, nesta ordem de confiança:
+2. **Modalidade** (`workplace_types`: `[hybrid]` no perfil `rio`, `[remote]` no `remoto`). A modalidade vem, nesta ordem de confiança:
    1. do campo da fonte (Gupy, labels do GitHub);
    2. de palavras no título, local ou labels ("Híbrido", "Presencial", "Remoto");
    3. de frases de regime de trabalho na descrição ("modelo híbrido", "3x por semana no escritório"). "Nuvem híbrida" e "acesso remoto" não contam;
@@ -146,7 +163,7 @@ Ordem das verificações (a primeira reprovação encerra):
 5. **Nível declarado pela fonte**: tipo de vaga do Gupy (estágio, trainee, banco de talentos) e labels do GitHub (Pleno, Sênior, Estagiário).
 6. **Descrição**: frases de nível ("vaga para pleno") e anos de experiência, em português e inglês ("experiência mínima de 3 anos", "3+ years"). Com `max_years_experience: 2`, exigir **3+ anos** descarta.
 7. **Júnior explícito**: precisa de um marcador no título (júnior, jr, assistente, N1, nível 1, "Analista de Infraestrutura **I**") ou do nível informado pela fonte.
-8. **Localização** (modo `cities`):
+8. **Localização**. No perfil `remoto` (modo `regions`): EUA, Canadá, Austrália ou Global; "APAC" conta como Austrália. No perfil `rio` (modo `cities`):
    - cidade-alvo ou um bairro dela ("Barra da Tijuca, Rio de Janeiro" conta como Rio);
    - cidades da região metropolitana, se `include_metro: true` (Niterói, São Gonçalo, Duque de Caxias...);
    - "Volta Redonda, Rio de Janeiro" **não** conta: aí "Rio de Janeiro" é o estado;
@@ -156,14 +173,15 @@ Ordem das verificações (a primeira reprovação encerra):
 
 | Quero... | Mude no `config.yaml` |
 |---|---|
-| Incluir vagas presenciais também | `workplace_types: [hybrid, onsite]` |
-| Incluir remotas abertas a quem mora no Rio | `workplace_types: [hybrid, remote]` |
-| Só a capital, sem região metropolitana | `include_metro: false` |
+| Incluir presenciais no Rio também | `profiles.rio.filters.workplace_types: [hybrid, onsite]` |
+| Incluir remotas de empresas brasileiras | `profiles.rio.filters.workplace_types: [hybrid, remote]` |
+| Só a capital, sem região metropolitana | `profiles.rio.filters.include_metro: false` |
+| Desligar um perfil sem apagar | `enabled: false` dentro do perfil |
 | Ver vagas sem nível no título ("Analista de Infraestrutura") | `require_junior_marker: false` (entram com aviso; a blacklist continua valendo) |
 | Descartar vagas sem modalidade informada | `unknown_workplace: reject` |
 | Incluir help desk / service desk | descomente as linhas no fim de `filters.areas.infra_cloud_sysadmin` |
 | Aceitar até 3 anos de experiência | `max_years_experience: 3` |
-| Buscar outra cidade | troque `target_cities`, `metro_cities` e `target_state` |
+| Buscar outra cidade | crie outro perfil copiando o `rio` e troque `target_cities`, `metro_cities` e `target_state` |
 
 Termo com `: ` (dois-pontos e espaço) no YAML precisa de aspas, senão vira dicionário. O programa avisa se isso acontecer.
 
@@ -228,7 +246,7 @@ Não agende com intervalo menor que 1 hora: o cache HTTP de 60 minutos faria a s
 | HTML no lugar de JSON | erro claro ("Resposta não é JSON") em vez de crash |
 | Uma fonte quebra | as demais continuam; o resumo final lista os erros por fonte |
 | Mesma vaga em várias fontes | deduplicada por título + empresa normalizados |
-| Banco criado por versão antiga | colunas novas adicionadas automaticamente |
+| Banco criado por versão antiga | colunas novas adicionadas automaticamente; vagas antigas ficam no perfil `remoto` |
 
 ---
 
@@ -236,13 +254,13 @@ Não agende com intervalo menor que 1 hora: o cache HTTP de 60 minutos faria a s
 
 ```
 Jobs/
-├── config.yaml              # perfil Rio (padrão): fontes, filtros, relatório, notificações
-├── config.remoto.yaml       # perfil remoto internacional
+├── config.yaml              # perfis (rio + remoto), fontes, filtros, relatório, notificações
 ├── .env.example             # credenciais (copie para .env)
 ├── requirements.txt
 ├── jobcrawler/
 │   ├── cli.py               # comandos run / report / import / list / check
 │   ├── pipeline.py          # coleta → dedupe → filtro → banco → export → notificação
+│   ├── profiles.py          # perfis de busca (filtros comuns + ajustes por perfil)
 │   ├── filters.py           # área, senioridade, modalidade, cidade, anos de experiência
 │   ├── http.py              # cliente HTTP: retry, rate limit, circuit breaker, cache
 │   ├── models.py            # modelo Job normalizado
@@ -259,7 +277,7 @@ Jobs/
 
 1. Crie `jobcrawler/sources/minha_fonte.py` com uma função pura `parse_job(item) -> Job` e uma classe que herda de `Source` com `name = "minha_fonte"` e um método `fetch()` (use `self.http.get_json/get_text` e `self._safe(...)`). Se a fonte informa a modalidade num campo, preencha `Job.workplace` (`hybrid`, `onsite` ou `remote`).
 2. Registre a classe em `jobcrawler/sources/__init__.py`.
-3. Adicione `minha_fonte: {enabled: true, ...}` em `config.yaml`.
+3. Adicione `minha_fonte: {enabled: true, ...}` em `sources` e o nome dela em `profiles.<perfil>.sources`.
 4. Escreva um teste do parser com um exemplo real da resposta.
 
 ## Testes
@@ -268,4 +286,4 @@ Jobs/
 pytest -q
 ```
 
-Os testes cobrem os dois perfis de filtro (blacklist em português e inglês, marcadores júnior, modalidade, cidades e região metropolitana, anos de experiência), os parsers de cada fonte com amostras no formato real, o cliente HTTP (429, 5xx, bloqueio, cache), a migração do banco e o pipeline ponta a ponta com uma fonte simulada.
+Os testes cobrem os dois perfis rodando juntos, os filtros de cada um (blacklist em português e inglês, marcadores júnior, modalidade, cidades e região metropolitana, anos de experiência), os parsers de cada fonte com amostras no formato real, o cliente HTTP (429, 5xx, bloqueio, cache), a migração do banco e o pipeline ponta a ponta com uma fonte simulada.

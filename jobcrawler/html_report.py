@@ -94,7 +94,7 @@ def _row(rec: dict) -> str:
 
     return f"""
 <li class="job" data-area="{_e(area)}" data-regions="{_e('|'.join(regions))}"
-    data-new="{'1' if is_new else '0'}" data-date="{_e(rec.get('published_at') or '')}"
+    data-new="{'1' if is_new else '0'}" data-profile="{_e(rec.get('profile') or '')}" data-date="{_e(rec.get('published_at') or '')}"
     data-search="{_e(search)}">
   <div class="job-head">
     {title_html}
@@ -133,6 +133,32 @@ def _area_bar(records: list[dict]) -> str:
             f'({len(records)} vagas no total)">{"".join(segs)}</div>')
 
 
+def _per_profile_line(meta: dict) -> str:
+    per = meta.get("per_profile") or {}
+    if len(per) < 2:
+        return ""
+    labels = meta.get("profiles") or {}
+    parts = ", ".join(f"{_e(labels.get(k, k))}: {v}" for k, v in per.items())
+    return f"<p>Aceitas por perfil: {parts}.</p>"
+
+
+def _profile_tabs(records: list[dict], labels: dict[str, str]) -> str:
+    """Seletor de perfil (só aparece com vagas de 2+ perfis)."""
+    counts: dict[str, int] = {}
+    for rec in records:
+        if rec.get("profile"):
+            counts[rec["profile"]] = counts.get(rec["profile"], 0) + 1
+    if len(counts) < 2:
+        return ""
+    order = [k for k in labels if k in counts] + sorted(k for k in counts if k not in labels)
+    tabs = [f'<button type="button" class="tab" role="radio" aria-checked="true" data-profile="">'
+            f'Todas <span class="n">{len(records)}</span></button>']
+    tabs += [f'<button type="button" class="tab" role="radio" aria-checked="false" '
+             f'data-profile="{_e(k)}">{_e(labels.get(k, k))} <span class="n">{counts[k]}</span></button>'
+             for k in order]
+    return f'<div class="tabs" role="radiogroup" aria-label="Perfil de busca">{"".join(tabs)}</div>'
+
+
 def _run_details(meta: dict) -> str:
     per_source = meta.get("per_source") or {}
     errors = meta.get("errors") or {}
@@ -155,6 +181,7 @@ def _run_details(meta: dict) -> str:
 <details class="run">
   <summary>Detalhes da execução</summary>
   <p>Coletadas {meta.get('fetched', 0)} vagas, {meta.get('unique', 0)} únicas depois de remover duplicatas.</p>
+  {_per_profile_line(meta)}
   {f'<p>Descartadas por: {_e(stage_txt)}.</p>' if stage_txt else ''}
   <table><thead><tr><th>Fonte</th><th>Coletadas</th><th>Aceitas</th><th>Erros</th></tr></thead>
   <tbody>{rows}</tbody></table>
@@ -185,14 +212,17 @@ def render_html(records: list[dict], meta: dict | None = None) -> str:
     # Chips de região/cidade: códigos conhecidos primeiro (US, CA...), depois as
     # cidades por número de vagas, e "não informado" por último.
     counts: dict[str, int] = {}
+    region_profiles: dict[str, set[str]] = {}
     for rec in records:
         for r in _regions(rec):
             counts[r] = counts.get(r, 0) + 1
-    known = [r for r in REGION_ORDER if r in counts]
-    others = sorted((r for r in counts if r not in REGION_ORDER), key=lambda r: (
+            region_profiles.setdefault(r, set()).add(rec.get("profile") or "")
+    known: list[str] = []
+    others = sorted(counts, key=lambda r: (
         r.startswith("NÃO INFORMADO") or "não informada" in r, -counts[r], r))
     region_buttons = "".join(
-        f'<button type="button" class="chip" data-region="{_e(r)}" aria-pressed="false">'
+        f'<button type="button" class="chip" data-region="{_e(r)}" '
+        f'data-profiles="{_e("|".join(sorted(region_profiles[r])))}" aria-pressed="false">'
         f'{_e(REGION_NAMES.get(r, r))} <span class="n">{counts[r]}</span></button>'
         for r in known + others) if len(counts) > 1 else ""
 
@@ -213,6 +243,7 @@ def render_html(records: list[dict], meta: dict | None = None) -> str:
         title_suffix=f" ({n_new} novas)" if n_new else "",
         area_bar=_area_bar(records),
         region_buttons=region_buttons,
+        profile_tabs=_profile_tabs(records, meta.get("profiles") or {}),
         toolbar_hidden="" if records else " hidden",
         body=body,
         run_details=_run_details(meta),
@@ -285,6 +316,15 @@ header h1 {{ font-size: 2rem; line-height: 1.15; margin: 0 0 8px; letter-spacing
 .lede {{ font-size: 1.125rem; margin: 0 0 4px; max-width: 60ch; }}
 .stamp {{ color: var(--muted); margin: 0 0 28px; font-size: .9375rem; }}
 
+/* Seletor de perfil (Todas / Híbridas no Rio / Remotas no exterior) */
+.tabs {{ display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); padding: 3px; gap: 3px; margin-bottom: 16px; }}
+.tab {{ font: inherit; font-weight: 700; color: var(--ink); background: none; border: 0;
+  border-radius: 4px; padding: 8px 14px; cursor: pointer; }}
+.tab .n {{ color: var(--muted); font-weight: 400; margin-left: 2px; }}
+.tab[aria-checked="true"] {{ background: var(--ink); color: var(--paper); }}
+.tab[aria-checked="true"] .n {{ color: inherit; }}
+
 /* Barra de áreas: proporção + filtro */
 .areabar {{ display: flex; gap: 3px; height: 56px; margin-bottom: 20px; }}
 .seg {{
@@ -350,7 +390,7 @@ a.title:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
   font-size: .875rem; color: var(--muted); }}
 .excerpt summary {{ cursor: pointer; color: var(--focus); }}
 .excerpt p {{ color: var(--ink); max-width: 72ch; margin: 6px 0 0; font-size: .9375rem; }}
-.job[hidden] {{ display: none; }}
+.job[hidden], .seg[hidden], .chip[hidden] {{ display: none; }}
 
 .empty {{ background: var(--surface); border: 1px dashed var(--line); border-radius: 6px; padding: 24px; }}
 .empty p {{ margin: 0 0 8px; max-width: 64ch; }}
@@ -381,6 +421,8 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
     <p class="lede">{lede}</p>
     <p class="stamp">Gerado em {generated}. {scope}</p>
   </header>
+
+  {profile_tabs}
 
   {area_bar}
 
@@ -414,6 +456,29 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
   var areabar = document.querySelector(".areabar");
   var areaBtns = Array.prototype.slice.call(document.querySelectorAll(".seg"));
   var regionBtns = Array.prototype.slice.call(document.querySelectorAll(".chip"));
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+  var currentProfile = "";
+
+  function selectProfile(key) {{
+    currentProfile = key;
+    tabs.forEach(function (t) {{ t.setAttribute("aria-checked", t.dataset.profile === key ? "true" : "false"); }});
+    // esconde cidades/países que não existem no perfil escolhido
+    regionBtns.forEach(function (b) {{
+      var ok = !key || b.dataset.profiles.split("|").indexOf(key) !== -1;
+      b.hidden = !ok;
+      if (!ok) b.setAttribute("aria-pressed", "false");
+    }});
+    // barra de áreas passa a contar só as vagas do perfil
+    areaBtns.forEach(function (b) {{
+      var n = jobs.filter(function (li) {{
+        return li.dataset.area === b.dataset.area && (!key || li.dataset.profile === key);
+      }}).length;
+      b.hidden = n === 0;
+      b.style.flexGrow = n;
+      b.querySelector(".seg-n").textContent = n;
+      if (n === 0) b.setAttribute("aria-pressed", "false");
+    }});
+  }}
 
   function fold(s) {{
     return (s || "").normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
@@ -452,11 +517,12 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
       var ok = terms.every(function (t) {{ return hay.indexOf(t) !== -1; }})
         && (!areas.length || areas.indexOf(li.dataset.area) !== -1)
         && (!regions.length || regions.some(function (r) {{ return jobRegions.indexOf(r) !== -1; }}))
+        && (!currentProfile || li.dataset.profile === currentProfile)
         && (!newOnly || li.dataset.new === "1");
       li.hidden = !ok;
       if (ok) shown++;
     }});
-    var filtered = terms.length || areas.length || regions.length || newOnly;
+    var filtered = terms.length || areas.length || regions.length || newOnly || currentProfile;
     count.textContent = "";
     if (filtered) {{
       count.append(shown === 0 ? "Nenhuma vaga com esses filtros." :
@@ -466,6 +532,7 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
       clear.onclick = function () {{
         q.value = "";
         areaBtns.concat(regionBtns, [onlyNew]).forEach(function (b) {{ b.setAttribute("aria-pressed", "false"); }});
+        selectProfile("");
         apply(); q.focus();
       }};
       count.append(clear);
@@ -484,6 +551,7 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
   onlyNew.addEventListener("click", function () {{ toggle(onlyNew); }});
   areaBtns.forEach(function (b) {{ b.addEventListener("click", function () {{ toggle(b); }}); }});
   regionBtns.forEach(function (b) {{ b.addEventListener("click", function () {{ toggle(b); }}); }});
+  tabs.forEach(function (t) {{ t.addEventListener("click", function () {{ selectProfile(t.dataset.profile); apply(); }}); }});
   sort.addEventListener("change", resort);
   apply();
 }})();

@@ -32,6 +32,7 @@ class Job:
     workplace_hint: str = ""
 
     # --- preenchidos pelo motor de filtros ---
+    profile: str = ""           # perfil de busca que aceitou a vaga ("rio", "remoto"...)
     area: str = ""              # security | devops_sre_platform | infra_cloud_sysadmin
     regions: list[str] = field(default_factory=list)   # US, CA, GLOBAL... ou cidades
     junior_signal: str = ""     # o que tornou a vaga "explicitamente júnior"
