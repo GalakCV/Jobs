@@ -148,3 +148,90 @@ def test_schema_drift_detection():
 def test_partial_failures_are_tolerated():
     items = [REMOTIVE_ITEM, REMOTIVE_ITEM, {"broken": True}]
     assert len(parse_many(items, remotive.parse_job, "remotive")) == 2
+
+
+# --------------------------------------------------------------------------
+# Fontes brasileiras
+# --------------------------------------------------------------------------
+from jobcrawler.sources import github_issues, gupy  # noqa: E402
+
+GUPY_ITEM = {
+    "id": 9876543, "companyId": 123, "name": "Analista de Infraestrutura Júnior",
+    "description": "<p>Atuar com <b>Linux</b> e redes. Modelo híbrido.</p>",
+    "careerPageId": 55, "careerPageName": "Empresa Carioca", "careerPageLogo": None,
+    "type": "vacancy_type_effective", "publishedDate": "2026-10-08T13:00:00.000Z",
+    "applicationDeadline": None, "isRemoteWork": False, "city": "Rio de Janeiro",
+    "state": "Rio de Janeiro", "country": "Brasil", "careerPageUrl": "https://carioca.gupy.io",
+    "jobUrl": "https://carioca.gupy.io/jobs/9876543?jobBoardSource=gupy_portal",
+    "workplaceType": "hybrid", "skills": ["Linux", "Redes"],
+}
+
+
+def test_gupy_parser():
+    job = gupy.parse_job(GUPY_ITEM)
+    assert job.title == "Analista de Infraestrutura Júnior" and job.company == "Empresa Carioca"
+    assert job.location == "Rio de Janeiro, Rio de Janeiro" and job.workplace == "hybrid"
+    assert job.url.startswith("https://carioca.gupy.io/jobs/9876543")
+    assert job.published_at == "2026-10-08T13:00:00+00:00"
+    assert job.source_level == "" and "Linux" in job.description and "<" not in job.description
+
+
+@pytest.mark.parametrize("raw,expected", [("on-site", "onsite"), ("remote", "remote"),
+                                          ("hybrid", "hybrid"), (None, "")])
+def test_gupy_workplace(raw, expected):
+    assert gupy.parse_job({**GUPY_ITEM, "workplaceType": raw}).workplace == expected
+
+
+def test_gupy_remote_flag_fallback():
+    job = gupy.parse_job({**GUPY_ITEM, "workplaceType": None, "isRemoteWork": True})
+    assert job.workplace == "remote"
+
+
+def test_gupy_vacancy_types_become_levels():
+    assert gupy.parse_job({**GUPY_ITEM, "type": "vacancy_type_internship"}).source_level == "Estágio"
+    assert gupy.parse_job({**GUPY_ITEM, "type": "vacancy_type_talent_pool"}).source_level == "Banco de talentos"
+
+
+def test_gupy_state_without_city_is_not_read_as_city():
+    job = gupy.parse_job({**GUPY_ITEM, "city": ""})
+    assert job.location == "Estado do Rio de Janeiro"
+
+
+def test_gupy_extract_page_and_schema_drift():
+    items, total = gupy.extract_page({"data": [GUPY_ITEM], "pagination": {"total": 1}})
+    assert len(items) == 1 and total == 1
+    with pytest.raises(SchemaChangedError):
+        gupy.extract_page({"jobs": []})
+
+
+GITHUB_ISSUE = {
+    "html_url": "https://github.com/backend-br/vagas/issues/12345",
+    "repository_url": "https://api.github.com/repos/backend-br/vagas",
+    "title": "[Rio de Janeiro] Analista DevOps Júnior na Acme Tech",
+    "labels": [{"name": "Híbrido"}, {"name": "Júnior"}, {"name": "CLT"}, {"name": "AWS"}],
+    "body": "## Descrição\nVaga para o time de plataforma.\n\n## Local\nLocal: Centro, Rio de Janeiro",
+    "created_at": "2026-10-09T12:00:00Z",
+}
+
+
+def test_github_issue_parser():
+    job = github_issues.parse_issue(GITHUB_ISSUE)
+    assert job.title == "Analista DevOps Júnior" and job.company == "Acme Tech"
+    assert job.workplace == "hybrid" and job.source_level == "Júnior"
+    assert job.location.startswith("Rio de Janeiro")
+    assert "CLT" in job.tags and job.url.endswith("/issues/12345")
+
+
+def test_github_issue_brackets_with_modality():
+    job = github_issues.parse_issue({**GITHUB_ISSUE, "labels": [], "body": "",
+                                     "title": "[Híbrido] [Niterói] SRE Jr @ Empresa"})
+    assert job.location == "Niterói" and "Híbrido" in job.tags and job.company == "Empresa"
+
+
+def test_github_skips_pull_requests():
+    assert github_issues.parse_issue({**GITHUB_ISSUE, "pull_request": {}}) is None
+
+
+def test_linkedin_search_hint():
+    jobs = linkedin.parse_cards(LINKEDIN_HTML, workplace_hint="hybrid")
+    assert jobs[0].workplace_hint == "hybrid" and jobs[0].workplace == ""

@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from jobcrawler.filters import WORKPLACE_LABELS
 from jobcrawler.html_report import write_html
 from jobcrawler.models import Job
 
@@ -25,6 +26,7 @@ CSV_COLUMNS = [
     ("title", "Título"),
     ("company", "Empresa"),
     ("area_label", "Área"),
+    ("workplace_label", "Modalidade"),
     ("location", "Localização"),
     ("regions", "Regiões"),
     ("timezone", "Fuso exigido"),
@@ -41,6 +43,7 @@ def _rows(jobs: list[Job], new_fingerprints: set[str]) -> list[dict]:
     for job in sorted(jobs, key=lambda j: j.published_at or "", reverse=True):
         rec = job.to_record()
         rec["area_label"] = AREA_LABELS.get(job.area, job.area)
+        rec["workplace_label"] = WORKPLACE_LABELS.get(job.workplace, "Não informada")
         rec["is_new"] = "sim" if job.fingerprint in new_fingerprints else "não"
         rows.append(rec)
     return rows
@@ -93,7 +96,9 @@ def export_rejections(rejections: list[tuple[Job, str, str]], output_dir: str | 
     path = out / "rejections.csv"
     with path.open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["Etapa", "Motivo", "Título", "Empresa", "Localização", "Fonte", "Link"])
+        writer.writerow(["Etapa", "Motivo", "Título", "Empresa", "Localização", "Modalidade",
+                         "Fonte", "Link"])
         for job, stage, reason in rejections:
-            writer.writerow([stage, reason, job.title, job.company, job.location, job.source, job.url])
+            writer.writerow([stage, reason, job.title, job.company, job.location,
+                             job.workplace or job.workplace_hint, job.source, job.url])
     return path

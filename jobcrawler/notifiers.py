@@ -75,6 +75,7 @@ class DiscordNotifier(Notifier):
                     {"name": "Área", "value": AREA_LABELS.get(job.get("area"), job.get("area") or "-"),
                      "inline": True},
                     {"name": "Fonte", "value": job.get("source") or "-", "inline": True},
+                    {"name": "Busca", "value": job.get("profile_label") or "-", "inline": True},
                 ],
                 "timestamp": job.get("published_at") or None,
             } for job in jobs[i:i + 10]]
@@ -101,6 +102,8 @@ class TelegramNotifier(Notifier):
             blocks = []
             for job in jobs[i:i + 5]:
                 area = AREA_LABELS.get(job.get("area"), job.get("area") or "")
+                if job.get("profile_label"):
+                    area = f"{job['profile_label']} · {area}"
                 blocks.append(
                     f"<b><a href=\"{html.escape(job['url'], quote=True)}\">"
                     f"{html.escape(job['title'])}</a></b>\n"

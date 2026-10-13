@@ -3,11 +3,13 @@
 Exemplos:
   python -m jobcrawler run                       # execução completa
   python -m jobcrawler run --open                # + abre o relatório HTML no navegador
+  python -m jobcrawler run --profile rio         # só um dos perfis do config
   python -m jobcrawler report --days 14 --open   # HTML com o histórico do banco
   python -m jobcrawler run --explain             # + rejections.csv com motivos
   python -m jobcrawler run --sources himalayas,jobicy --dry-run
   python -m jobcrawler run --loop-hours 6        # repete a cada 6h (Ctrl+C para sair)
   python -m jobcrawler list --days 3             # vagas encontradas nos últimos 3 dias
+  python -m jobcrawler import linkedin_vagas.json  # importa vagas de um JSON
   python -m jobcrawler check "Junior DevOps Engineer" --location "USA"
 """
 
@@ -29,9 +31,10 @@ def _cmd_run(args, cfg) -> int:
     from jobcrawler.pipeline import run
 
     only = [s.strip() for s in args.sources.split(",")] if args.sources else None
+    profiles = [p.strip() for p in args.profile.split(",")] if args.profile else None
     while True:
         summary = run(cfg, only=only, dry_run=args.dry_run, notify=not args.no_notify,
-                      explain=args.explain, use_cache=not args.no_cache)
+                      explain=args.explain, use_cache=not args.no_cache, profiles_only=profiles)
         if summary.new:
             print(f"\n{len(summary.new)} vaga(s) nova(s):")
             for job in summary.new:
@@ -67,6 +70,7 @@ def _cmd_report(args, cfg) -> int:
     from datetime import datetime, timedelta, timezone
 
     from jobcrawler.html_report import write_html
+    from jobcrawler.profiles import profile_labels
     from jobcrawler.storage import JobStore
 
     rows = JobStore(cfg["storage"]["database"]).recent(args.days)
@@ -74,10 +78,57 @@ def _cmd_report(args, cfg) -> int:
     for r in rows:
         r["is_new"] = (r.get("first_seen") or "") >= cutoff
     out = Path(args.output) if args.output else Path(cfg["storage"]["output_dir"]) / "report.html"
-    write_html(out, rows, {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    write_html(out, rows, {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                           "report": cfg.get("report") or {},
+                           "profiles": profile_labels(cfg)})
     print(f"{len(rows)} vaga(s) dos últimos {args.days} dia(s) em {out}")
     if args.open:
         _open_in_browser(out)
+    return 0
+
+
+def _cmd_import(args, cfg) -> int:
+    """Importa vagas de um JSON (ex.: coletadas manualmente ou pelo navegador)."""
+    import json
+
+    from jobcrawler.models import Job
+    from jobcrawler.profiles import build_profiles, evaluate_any
+    from jobcrawler.storage import JobStore
+
+    data = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    items = data.get("jobs", []) if isinstance(data, dict) else data
+    fields = Job.__dataclass_fields__
+    profiles = build_profiles(cfg)
+    accepted, rejected, invalid = [], [], 0
+    for item in items:
+        kw = {k: v for k, v in item.items() if k in fields}
+        for key in ("tags", "regions"):
+            if isinstance(kw.get(key), str):
+                sep = "|" if key == "regions" else ","
+                kw[key] = [x.strip() for x in kw[key].split(sep) if x.strip()]
+        try:
+            job = Job(**kw)
+        except TypeError:
+            invalid += 1
+            continue
+        if not job.is_valid():
+            invalid += 1
+            continue
+        if args.no_filter:
+            accepted.append(job)
+            continue
+        _, decision = evaluate_any(profiles, job)
+        if decision.accepted:
+            accepted.append(job)
+        else:
+            rejected.append((job, decision.reason))
+
+    new = JobStore(cfg["storage"]["database"]).upsert(accepted)
+    print(f"{len(items)} no arquivo: {len(accepted)} aceitas ({len(new)} novas no banco), "
+          f"{len(rejected)} descartadas pelo filtro, {invalid} inválidas.")
+    for job, reason in rejected[:10]:
+        print(f"  descartada: {job.title} — {reason}")
+    print("Rode `python -m jobcrawler report --open` para ver tudo junto.")
     return 0
 
 
@@ -97,24 +148,33 @@ def _cmd_list(args, cfg) -> int:
 
 
 def _cmd_check(args, cfg) -> int:
-    """Testa o filtro com um título fictício, sem rede. Útil para ajustar o config."""
-    from jobcrawler.filters import FilterConfig, JobFilter
+    """Testa o filtro com um título fictício em cada perfil, sem rede."""
+    from jobcrawler.filters import WORKPLACE_LABELS
     from jobcrawler.models import Job
+    from jobcrawler.profiles import build_profiles
 
     description = Path(args.description_file).read_text(encoding="utf-8") if args.description_file else ""
-    job = Job(source="manual", title=args.title, company="Teste", url="https://example.com",
-              location=args.location, description=description, source_level=args.level)
-    decision = JobFilter(FilterConfig.from_dict(cfg["filters"])).evaluate(job)
-    status = "ACEITA" if decision.accepted else "DESCARTADA"
-    print(f"{status} | etapa: {decision.stage} | motivo: {decision.reason}")
-    if decision.accepted:
-        print(f"área: {decision.area} | júnior por: {decision.junior_signal} | regiões: {decision.regions}")
-    return 0 if decision.accepted else 1
+    any_accepted = False
+    for profile in build_profiles(cfg, [args.profile] if args.profile else None):
+        job = Job(source="manual", title=args.title, company="Teste", url="https://example.com",
+                  location=args.location, description=description, source_level=args.level,
+                  workplace=args.workplace)
+        decision = profile.job_filter.evaluate(job)
+        any_accepted |= decision.accepted
+        status = "ACEITA" if decision.accepted else "DESCARTADA"
+        print(f"[{profile.label}] {status} | etapa: {decision.stage} | motivo: {decision.reason}")
+        if decision.accepted:
+            print(f"    área: {decision.area} | júnior por: {decision.junior_signal} | "
+                  f"local: {', '.join(decision.regions)} | "
+                  f"modalidade: {WORKPLACE_LABELS.get(decision.workplace, 'não informada')}")
+            for note in decision.notes:
+                print(f"    aviso: {note}")
+    return 0 if any_accepted else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jobcrawler",
-                                     description="Crawler de vagas remotas JÚNIOR em DevOps, Security e Infra")
+                                     description="Crawler de vagas JÚNIOR em Segurança, DevOps e Infra")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-c", "--config", default="config.yaml", help="caminho do config.yaml")
     parser.add_argument("-v", "--verbose", action="store_true", help="log DEBUG (mostra cada decisão)")
@@ -122,6 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="coleta, filtra, salva, exporta e notifica")
     p_run.add_argument("--sources", help="lista separada por vírgula (ignora 'enabled' do config)")
+    p_run.add_argument("--profile", help="só estes perfis, separados por vírgula (ex.: rio)")
     p_run.add_argument("--dry-run", action="store_true", help="não grava no banco nem notifica")
     p_run.add_argument("--no-notify", action="store_true", help="não envia notificações")
     p_run.add_argument("--no-cache", action="store_true", help="ignora o cache HTTP em disco")
@@ -138,6 +199,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--open", action="store_true", help="abre no navegador")
     p_report.set_defaults(func=_cmd_report)
 
+    p_import = sub.add_parser("import", help="importa vagas de um arquivo JSON para o banco")
+    p_import.add_argument("file", help="JSON: lista de vagas ou {'jobs': [...]}")
+    p_import.add_argument("--no-filter", action="store_true",
+                          help="grava sem passar pelo filtro (não recomendado)")
+    p_import.set_defaults(func=_cmd_import)
+
     p_list = sub.add_parser("list", help="lista vagas salvas no banco")
     p_list.add_argument("--days", type=int, default=7)
     p_list.set_defaults(func=_cmd_list)
@@ -146,6 +213,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument("title")
     p_check.add_argument("--location", default="")
     p_check.add_argument("--level", default="", help="senioridade declarada pela fonte")
+    p_check.add_argument("--workplace", default="", help="modalidade da fonte: hybrid, onsite, remote")
+    p_check.add_argument("--profile", help="testa só neste perfil")
     p_check.add_argument("--description-file", help="arquivo .txt com a descrição")
     p_check.set_defaults(func=_cmd_check)
     return parser

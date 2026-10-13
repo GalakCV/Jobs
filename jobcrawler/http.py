@@ -96,14 +96,15 @@ class HttpClient:
             raise HttpError(f"Resposta não é JSON válido em {url}: {body[:120]!r}") from exc
 
     def get_text(self, url: str, params: dict | None = None,
-                 min_interval: float | None = None, cache: bool = True) -> str:
+                 min_interval: float | None = None, cache: bool = True,
+                 headers: dict | None = None) -> str:
         full_url = f"{url}?{urlencode(params, doseq=True)}" if params else url
         if cache and self.use_cache:
             cached = self._cache_read(full_url)
             if cached is not None:
                 log.debug("cache hit: %s", full_url)
                 return cached
-        body = self._request_with_retries(full_url, min_interval)
+        body = self._request_with_retries(full_url, min_interval, headers)
         if cache and self.use_cache:
             self._cache_write(full_url, body)
         return body
@@ -156,7 +157,8 @@ class HttpClient:
             return any(marker in sample for marker in BLOCK_MARKERS)
         return False
 
-    def _request_with_retries(self, url: str, min_interval: float | None) -> str:
+    def _request_with_retries(self, url: str, min_interval: float | None,
+                              headers: dict | None = None) -> str:
         host = self._host(url)
         # Um lock por host serializa as requisições ao mesmo domínio (rate limit
         # correto mesmo com várias fontes rodando em threads).
@@ -166,7 +168,8 @@ class HttpClient:
             for attempt in range(self.cfg.max_retries + 1):
                 self._respect_rate_limit(host, min_interval)
                 try:
-                    resp = self.session.get(url, timeout=self.cfg.timeout_seconds)
+                    resp = (self.session.get(url, timeout=self.cfg.timeout_seconds, headers=headers)
+                            if headers else self.session.get(url, timeout=self.cfg.timeout_seconds))
                 except requests.exceptions.ProxyError as exc:
                     # Proxy/firewall corporativo recusando o destino: persistente.
                     self._failures[host] = self.cfg.circuit_breaker_failures
@@ -180,6 +183,13 @@ class HttpClient:
                                     self.cfg.max_retries + 1, delay)
                         time.sleep(delay)
                     continue
+
+                if (resp.status_code in (403, 429)
+                        and resp.headers.get("X-RateLimit-Remaining") == "0"):
+                    self._failures[host] = self.cfg.circuit_breaker_failures
+                    raise BlockedError(
+                        f"{host}: limite de requisições da API atingido. "
+                        "Para o GitHub, defina GITHUB_TOKEN no .env (limite sobe de 60 para 5000/h).")
 
                 if self._looks_blocked(resp):
                     self._record(host, ok=False)

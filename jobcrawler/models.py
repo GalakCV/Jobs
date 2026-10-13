@@ -24,11 +24,25 @@ class Job:
     source_level: str = ""      # senioridade declarada pela fonte, se houver
     source_category: str = ""
     timezone: str = ""          # fuso exigido (preenchido pela fonte ou extraído)
+    # Modalidade: "hybrid", "onsite", "remote" ou "" (desconhecida).
+    # `workplace` vem de um campo estruturado da fonte (ex.: workplaceType do
+    # Gupy) e é confiável; `workplace_hint` é só um indício (ex.: o filtro de
+    # busca do LinkedIn, que erra) e gera um aviso no relatório.
+    workplace: str = ""
+    workplace_hint: str = ""
 
     # --- preenchidos pelo motor de filtros ---
+    profile: str = ""           # perfil de busca que aceitou a vaga ("rio", "remoto"...)
     area: str = ""              # security | devops_sre_platform | infra_cloud_sysadmin
-    regions: list[str] = field(default_factory=list)   # US, CA, AU, GLOBAL...
+    regions: list[str] = field(default_factory=list)   # US, CA, GLOBAL... ou cidades
     junior_signal: str = ""     # o que tornou a vaga "explicitamente júnior"
+    note: str = ""              # aviso para quem lê (ex.: "remoto não confirmado")
+
+    def add_note(self, text: str) -> None:
+        """Acrescenta um aviso sem duplicar (notas de fonte + notas do filtro)."""
+        text = clean_ws(text)
+        if text and text not in self.note:
+            self.note = f"{self.note} {text}".strip()
 
     def __post_init__(self) -> None:
         self.title = clean_ws(self.title)
@@ -49,6 +63,7 @@ class Job:
         data = asdict(self)
         data["description"] = self.description[:excerpt_chars]
         data["tags"] = ", ".join(self.tags)
-        data["regions"] = ", ".join(self.regions)
+        # " | " porque nomes de cidade podem conter vírgula/espaço
+        data["regions"] = " | ".join(self.regions)
         data["fingerprint"] = self.fingerprint
         return data

@@ -97,3 +97,80 @@ def test_notifications_marked_only_on_success(cfg, monkeypatch):
     assert s1.notified == 1 and len(sent) == 1
     s2 = pipeline.run(cfg)           # já notificada: não reenvia
     assert s2.notified == 0 and len(sent) == 1
+
+
+def test_import_command_filters_and_merges(cfg, tmp_path, monkeypatch):
+    """`import` passa o JSON pelo filtro, grava no banco e o `report` inclui as vagas."""
+    import yaml
+
+    from jobcrawler.cli import main
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    payload = [
+        {"source": "linkedin", "title": "Junior Cloud Engineer", "company": "Koniag",
+         "url": "https://www.linkedin.com/jobs/view/1", "location": "Washington, Estados Unidos",
+         "note": "Remoto não confirmado"},
+        {"source": "linkedin", "title": "Senior SRE", "company": "X",
+         "url": "https://www.linkedin.com/jobs/view/2", "location": "USA"},
+        {"source": "linkedin", "title": "", "company": "Y", "url": "not-a-url"},
+    ]
+    data_file = tmp_path / "li.json"
+    data_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert main(["-c", str(cfg_path), "import", str(data_file)]) == 0
+    assert main(["-c", str(cfg_path), "report", "--output", str(tmp_path / "r.html")]) == 0
+    html = (tmp_path / "r.html").read_text(encoding="utf-8")
+    assert "Junior Cloud Engineer" in html and "Remoto não confirmado" in html
+    assert "Senior SRE" not in html
+
+
+def test_rio_profile_end_to_end(rio_config_dict, tmp_path, monkeypatch):
+    """Perfil padrão: só entra híbrido júnior no Rio e região metropolitana."""
+    monkeypatch.setitem(REGISTRY, "fake", FakeSource)
+    cfg = copy.deepcopy(rio_config_dict)
+    cfg["sources"] = {"fake": {"enabled": True}}
+    cfg["storage"] = {"database": str(tmp_path / "rio.db"), "output_dir": str(tmp_path / "out"),
+                      "export_formats": ["html", "csv"]}
+    cfg["http"]["cache_dir"] = str(tmp_path / "cache")
+
+    def rio(title, location="Rio de Janeiro, Rio de Janeiro", workplace="hybrid"):
+        return Job(source="gupy", title=title, company="Acme", location=location,
+                   workplace=workplace, url=f"https://acme.gupy.io/jobs/{abs(hash(title + location))}")
+
+    FakeSource.batch = [
+        rio("Analista de Infraestrutura Júnior"),
+        rio("Analista de Segurança da Informação Jr", "Niterói, Rio de Janeiro"),
+        rio("Analista DevOps Júnior", workplace="onsite"),
+        rio("Analista de SOC Júnior", "São Paulo, São Paulo"),
+        rio("Analista de Infraestrutura Pleno"),
+    ]
+    summary = pipeline.run(cfg, notify=False)
+    assert {j.title for j in summary.accepted} == {"Analista de Infraestrutura Júnior",
+                                                   "Analista de Segurança da Informação Jr"}
+    out = tmp_path / "out"
+    html = (out / "jobs_latest.html").read_text(encoding="utf-8")
+    assert "<h1>Vagas júnior em Segurança, DevOps e Infra</h1>" in html
+    assert 'data-region="Niterói"' in html
+    csv_text = (out / "jobs_latest.csv").read_text(encoding="utf-8-sig")
+    assert "Modalidade" in csv_text.splitlines()[0] and "Híbrido" in csv_text
+
+
+def test_old_database_is_migrated(tmp_path):
+    """Bancos criados antes das colunas note/workplace continuam funcionando."""
+    import sqlite3
+
+    from jobcrawler.storage import JobStore
+
+    db = tmp_path / "old.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE jobs (fingerprint TEXT PRIMARY KEY, title TEXT NOT NULL, "
+                     "company TEXT NOT NULL, url TEXT NOT NULL, source TEXT NOT NULL, "
+                     "sources TEXT NOT NULL, location TEXT, regions TEXT, timezone TEXT, area TEXT, "
+                     "junior_signal TEXT, source_level TEXT, tags TEXT, salary TEXT, "
+                     "published_at TEXT, description TEXT, first_seen TEXT NOT NULL, "
+                     "last_seen TEXT NOT NULL, notified INTEGER NOT NULL DEFAULT 0)")
+    store = JobStore(db)
+    new = store.upsert([Job(source="gupy", title="Analista de Infra Jr", company="Acme",
+                            url="https://acme.gupy.io/jobs/1", workplace="hybrid")])
+    assert len(new) == 1 and store.recent(1)[0]["workplace"] == "hybrid"

@@ -1,18 +1,19 @@
 """Motor de filtragem: área (whitelist), senioridade (júnior explícito +
-blacklist), localização/remoto e idade da vaga.
+blacklist), modalidade (híbrido / presencial / remoto), localização e idade.
 
 Cada vaga recebe um `FilterDecision` com o motivo exato do aceite ou descarte,
 o que permite auditar o filtro com `--explain` (gera rejections.csv).
 
 Ordem das verificações (a primeira reprovação encerra):
   1. Idade da vaga
-  2. Remoto (descarta hybrid / on-site)
-  3. Área pelo título (+ exclusões como "Cloud Sales")
+  2. Modalidade (ex.: só híbrido) - campo da fonte, título/local ou descrição
+  3. Área pelo título (+ exclusões como "Segurança do Trabalho")
   4. Blacklist de senioridade no TÍTULO          <- regra crítica
-  5. Nível declarado pela fonte (Mid/Senior/Intern => descarta)
+  5. Nível declarado pela fonte (Pleno/Sênior/Estágio => descarta)
   6. Descrição: frases de nível / anos de experiência (ou modo strict)
   7. Marcador júnior explícito (título, fonte ou, se habilitado, descrição)
-  8. Região (US / CA / AU / Global)
+  8. Localização: cidades-alvo (modo "cities") ou regiões US/CA/AU/Global
+     (modo "regions", usado pelo perfil remoto)
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ _NUM = r"(\d{1,2}|" + "|".join(_NUM_WORDS) + r")"
 _YEARS = r"(?:years?|yrs?|anos?)"
 # Exige uma palavra de "experiência" logo depois (na mesma frase), para não
 # confundir com "founded 10 years ago" ou "2 years of runway".
-_EXP_CONTEXT = r"(?:experience|exp|experiencia|background|track record)" + _E
+_EXP_CONTEXT = r"(?:experience|exp|experiencia|vivencia|atuacao|background|track record)" + _E
 
 _YEARS_PATTERNS = [
     # "3-5 years of experience", "3 to 5 years of hands-on experience"
@@ -65,6 +66,8 @@ _YEARS_PATTERNS = [
     re.compile(_B + _NUM + r"\s*(?:\+|plus)?\s*" + _YEARS + r"(?:'|’)?[^.;\n]{0,60}?" + _EXP_CONTEXT),
     # "minimum of 4 years", "at least 3 years", "no minimo 3 anos"
     re.compile(r"(?:minimum(?: of)?|at least|no minimo|pelo menos|min\.)\s*" + _NUM + r"\s*\+?\s*" + _YEARS),
+    # "experiencia minima de 3 anos", "experiencia comprovada de 2 anos"
+    re.compile(r"(?:experiencia|vivencia)\s+(?:\w+\s+){0,2}?de\s+" + _NUM + r"\s*\+?\s*" + _YEARS),
 ]
 
 
@@ -115,17 +118,22 @@ _US_STATE_CODES = {
     "VA", "WA", "WV", "WI", "WY", "DC",
 }
 _REGION_PATTERNS: dict[str, re.Pattern] = {
-    "US": re.compile(_B + r"(?:united states|usa|u\.s\.a?\.?|us|"
-                     r"(?<!latin )(?<!south )(?<!central )america|" + _US_STATES + r")" + _E),
+    # Inclui grafias em português/espanhol: sites como o LinkedIn localizam o
+    # texto pelo idioma do navegador ("Estados Unidos", "Ilinóis", "Tenessi").
+    "US": re.compile(_B + r"(?:united states|usa|u\.s\.a?\.?|us|estados unidos|eua|ee\.?\s?uu\.?|"
+                     r"(?<!latin )(?<!south )(?<!central )america|" + _US_STATES + r"|"
+                     r"tenessi|minesota|ilinois|pensilvania|carolina do (?:norte|sul)|"
+                     r"nova (?:iorque|jersey)|luisiana|havai|distrito de columbia)" + _E),
     "CA": re.compile(_B + r"(?:canada|canadian|ontario|toronto|vancouver|british columbia|"
                      r"quebec|alberta|montreal|calgary|ottawa)" + _E),
     "AU": re.compile(_B + r"(?:australia|australian|aus|sydney|melbourne|brisbane|perth|"
                      r"adelaide|canberra|anz|oceania)" + _E),
-    "NA": re.compile(_B + r"(?:north america|americas|us\s*(?:/|&|and|or)\s*canada)" + _E),
+    "NA": re.compile(_B + r"(?:north america|america do norte|americas|us\s*(?:/|&|and|or)\s*canada)" + _E),
     "APAC": re.compile(_B + r"(?:apac|asia[- ]pacific)" + _E),
     "GLOBAL": re.compile(_B + r"(?:worldwide|anywhere|global|globally|international|"
                          r"all countries|any location|no location restrictions?|"
-                         r"remote anywhere|work from anywhere)" + _E),
+                         r"remote anywhere|work from anywhere|"
+                         r"mundo todo|qualquer lugar|global remoto|todo el mundo)" + _E),
 }
 _STATE_CODE_SUFFIX = re.compile(r",\s*([A-Z]{2})\b")
 
@@ -157,6 +165,118 @@ def classify_regions(location: str, accept_apac_as_au: bool = True) -> list[str]
 
 
 # ---------------------------------------------------------------------------
+# Modalidade (híbrido / presencial / remoto)
+# ---------------------------------------------------------------------------
+WORKPLACE_LABELS = {"hybrid": "Híbrido", "onsite": "Presencial", "remote": "Remoto"}
+
+# Título, local e labels: a palavra sozinha basta. Exceções para "nuvem
+# híbrida" / "hybrid cloud", que descrevem tecnologia e não o regime.
+_WP_TITLE = [
+    ("hybrid", re.compile(r"(?<!nuvem )(?<!nuvens )(?<!ambiente )(?<!ambientes )"
+                          r"(?<!infraestrutura )" + _B + r"(?:hibrid[oa]s?|hybrid|semi[- ]?presencial)"
+                          + r"(?!\s*(?:cloud|it|infra\w*|environment|multi\w*))" + _E)),
+    ("onsite", re.compile(_B + r"(?:presencial|on[- ]?site|in[- ]office|onsite)" + _E)),
+    ("remote", re.compile(_B + r"(?:remot[oa]s?|remote|home[- ]?office|anywhere|teletrabalho)" + _E)),
+]
+# Descrição: exige contexto de regime de trabalho ("modelo híbrido",
+# "3x por semana no escritório"), porque "híbrido" e "remoto" aparecem
+# em contextos técnicos ("acesso remoto", "ambientes híbridos").
+_CTX = r"(?:modelo|regime|formato|modalidade|trabalho|jornada|atuacao|vaga|posicao|work|role|position|schedule)"
+_WP_DESC = [
+    ("hybrid", re.compile(
+        _B + _CTX + r"\s+(?:de\s+trabalho\s+|\w+\s+)?(?:e\s+)?hibrid[oa]" + _E
+        + r"|" + _B + r"hybrid\s+(?:work|role|position|schedule|model|working|setup)" + _E
+        + r"|" + _B + r"\d\s*(?:x|vezes|dias?)\s*(?:por\s+semana|na\s+semana|semanais)?\s*"
+                      r"(?:no|na|ao|em)?\s*(?:escritorio|presencial|office)"
+        + r"|" + _B + r"(?:hibrid[oa])\s*\(\s*\d")),
+    ("onsite", re.compile(
+        r"100%\s*presencial|" + _B + _CTX + r"\s+(?:de\s+trabalho\s+)?(?:100%\s*)?presencial" + _E
+        + r"|" + _B + r"(?:fully\s+)?on[- ]?site\s+(?:role|position|work)" + _E)),
+    ("remote", re.compile(
+        r"100%\s*remot[oa]|" + _B + _CTX + r"\s+(?:de\s+trabalho\s+)?(?:100%\s*)?remot[oa]" + _E
+        + r"|" + _B + r"(?:fully\s+remote|remote[- ]first)" + _E)),
+]
+_WP_FIELD = {"hybrid": "hybrid", "hibrido": "hybrid", "on-site": "onsite", "onsite": "onsite",
+             "on_site": "onsite", "presencial": "onsite", "remote": "remote", "remoto": "remote"}
+
+
+def normalize_workplace(value: str | None) -> str:
+    """Normaliza valores de campos estruturados ('on-site', 'Híbrido'...)."""
+    return _WP_FIELD.get(fold(value or "").replace(" ", ""), "")
+
+
+def detect_workplace(job: Job, use_description: bool = True) -> tuple[str, str]:
+    """Retorna (modalidade, de_onde_veio). Ordem de confiança:
+    campo da fonte > título/local/labels > descrição > indício da busca."""
+    if wp := normalize_workplace(job.workplace):
+        return wp, "fonte"
+    strong_text = fold(" | ".join([job.title, job.location, " ".join(job.tags)]))
+    for wp, pattern in _WP_TITLE:
+        if pattern.search(strong_text):
+            return wp, "título/local"
+    if use_description and job.description:
+        desc = fold(job.description)
+        for wp, pattern in _WP_DESC:
+            if pattern.search(desc):
+                return wp, "descrição"
+    if wp := normalize_workplace(job.workplace_hint):
+        return wp, "indício"
+    return "", ""
+
+
+# ---------------------------------------------------------------------------
+# Cidades (modo "cities")
+# ---------------------------------------------------------------------------
+_LOC_SPLIT = re.compile(r"\s*(?:,|/|\||;|\(|\)|\[|\]|\s[-–]\s|\s+e\s+regiao|\s+metropolitan\w*)\s*")
+_LOC_NOISE = {"brasil", "brazil", "br", "remoto", "remote", "hibrido", "hybrid", "presencial",
+              "on-site", "onsite", "e regiao", "regiao", "area", "grande", ""}
+
+
+class CityMatcher:
+    """Decide se uma localização está nas cidades-alvo.
+
+    Regras, aplicadas aos trechos do texto em ordem ("Niterói, RJ, Brasil"):
+      * trecho que é cidade-alvo, bairro/apelido ou cidade metropolitana -> casa;
+      * o nome do estado ("Rio de Janeiro") só conta como CIDADE se for o
+        primeiro trecho com significado. "Volta Redonda, Rio de Janeiro"
+        é outra cidade do estado e NÃO casa;
+      * só a sigla/nome do estado, sem cidade -> "cidade não informada".
+    """
+
+    def __init__(self, cities: dict[str, list[str]], metro: list[str], include_metro: bool,
+                 state_names: list[str], state_label: str):
+        self.lookup: dict[str, str] = {}
+        for city, aliases in (cities or {}).items():
+            for name in [city, *(aliases or [])]:
+                self.lookup[fold(name)] = city
+        if include_metro:
+            for city in metro or []:
+                self.lookup.setdefault(fold(city), city)
+        self.state_names = {fold(n) for n in state_names or []}
+        self.state_label = state_label
+
+    def match(self, location: str) -> tuple[str, str]:
+        """Retorna (status, rótulo): ('city', 'Niterói'), ('state', 'RJ'),
+        ('unknown', '') ou ('other', 'São Paulo')."""
+        parts = [p for p in (x.strip(" .") for x in _LOC_SPLIT.split(fold(location)))
+                 if p not in _LOC_NOISE]
+        if not parts:
+            return "unknown", ""
+        seen_other = False
+        only_state = True
+        for part in parts:
+            if part in self.lookup and not (seen_other and part in self.state_names):
+                return "city", self.lookup[part]
+            if part in self.state_names:
+                continue
+            only_state = False
+            seen_other = True
+        if only_state:
+            return "state", self.state_label
+        return "other", parts[0].title()
+
+
+# ---------------------------------------------------------------------------
 # Configuração e decisão
 # ---------------------------------------------------------------------------
 @dataclass
@@ -171,10 +291,22 @@ class FilterConfig:
     description_reject_phrases: list[str] = field(default_factory=list)
     junior_marker_in_description: bool = False
     trust_source_seniority: bool = True
+    require_junior_marker: bool = True
+    # --- modalidade ---
+    workplace_types: list[str] = field(default_factory=lambda: ["remote"])
+    unknown_workplace: str = "keep"          # keep (com aviso) | reject
+    workplace_from_description: bool = True
+    # --- localização ---
+    location_mode: str = "regions"           # regions (US/CA/AU/Global) | cities
     accepted_regions: list[str] = field(default_factory=lambda: ["US", "CA", "AU", "GLOBAL"])
     accept_apac_as_au: bool = True
+    target_cities: dict[str, list[str]] = field(default_factory=dict)
+    metro_cities: list[str] = field(default_factory=list)
+    include_metro: bool = True
+    target_state: dict = field(default_factory=dict)   # {label: RJ, names: [...]}
+    accept_state_only: bool = True
     allow_unknown_location: bool = True
-    reject_onsite_terms: list[str] = field(default_factory=list)
+    reject_onsite_terms: list[str] = field(default_factory=list)   # legado, ignorado
     max_age_days: int = 30
 
     @classmethod
@@ -188,6 +320,15 @@ class FilterConfig:
             raise ValueError("filters.areas está vazio: nenhuma vaga passaria no filtro")
         if not cfg.seniority_blacklist:
             raise ValueError("filters.seniority_blacklist está vazio (filtro crítico)")
+        bad = set(cfg.workplace_types) - set(WORKPLACE_LABELS)
+        if bad or not cfg.workplace_types:
+            raise ValueError("filters.workplace_types aceita: hybrid, onsite, remote")
+        if cfg.unknown_workplace not in ("keep", "reject"):
+            raise ValueError("filters.unknown_workplace deve ser 'keep' ou 'reject'")
+        if cfg.location_mode not in ("regions", "cities"):
+            raise ValueError("filters.location_mode deve ser 'regions' ou 'cities'")
+        if cfg.location_mode == "cities" and not cfg.target_cities:
+            raise ValueError("filters.target_cities está vazio no modo 'cities'")
         return cfg
 
 
@@ -199,16 +340,22 @@ class FilterDecision:
     area: str = ""
     junior_signal: str = ""
     regions: list[str] = field(default_factory=list)
+    workplace: str = ""
+    notes: list[str] = field(default_factory=list)
 
 
 # Nível declarado por fontes (Himalayas, Jobicy, ...)
 _SOURCE_REJECT = re.compile(_B + r"(?:mid|midweight|mid[- ]level|senior|sr|lead|manager|"
-                            r"director|executive|principal|staff|intern|internship)" + _E)
-_SOURCE_JUNIOR = re.compile(_B + r"(?:entry[- ]?level|entry|junior|jr|graduate)" + _E)
+                            r"director|executive|principal|staff|intern|internship|"
+                            r"pleno|especialista|estagio|estagiario|trainee|aprendiz|"
+                            r"banco de talentos|talent pool|summer)" + _E)
+_SOURCE_JUNIOR = re.compile(_B + r"(?:entry[- ]?level|entry|junior|jr|graduate|assistente)" + _E)
 _DESC_JUNIOR = re.compile(r"(?:this is an?|hiring an?|for an?|seeking an?|looking for an?)\s+"
                           r"(?:junior|entry[- ]level)\b")
 _ROMAN_ONE = re.compile(r"\b(?:Engineer|Analyst|Administrator|Admin|Technician|Specialist|"
-                        r"Associate|Developer|Operator)\s+I\b(?!\s*[IVX])")
+                        r"Associate|Developer|Operator)\s+I\b(?!\s*[IVX])"
+                        # "Analista de Infraestrutura I", "Técnico de Suporte I - Híbrido"
+                        r"|(?<=[a-zà-ú])\s+I(?=\s*(?:$|[-–(),/|]))")
 
 
 class JobFilter:
@@ -219,12 +366,15 @@ class JobFilter:
         self.junior = compile_terms(cfg.junior_markers)
         self.blacklist = compile_terms(cfg.seniority_blacklist)
         self.desc_phrases = compile_terms(cfg.description_reject_phrases)
-        self.onsite = compile_terms(cfg.reject_onsite_terms)
+        self.cities = None
+        if cfg.location_mode == "cities":
+            state = cfg.target_state or {}
+            self.cities = CityMatcher(cfg.target_cities, cfg.metro_cities, cfg.include_metro,
+                                      state.get("names", []), state.get("label", ""))
 
     # ------------------------------------------------------------------
     def evaluate(self, job: Job) -> FilterDecision:
         title = fold(job.title)
-        location = fold(job.location)
         description = fold(job.description)
 
         # 1. Idade -------------------------------------------------------
@@ -233,9 +383,23 @@ class JobFilter:
             if age is not None and age > self.cfg.max_age_days:
                 return self._no("age", f"publicada há {age:.0f} dias (> {self.cfg.max_age_days})")
 
-        # 2. 100% remoto ---------------------------------------------------
-        if self.onsite and (m := self.onsite.search(f"{title} | {location}")):
-            return self._no("remote", f"não é 100% remoto ('{m.group(0)}')")
+        # 2. Modalidade ----------------------------------------------------
+        notes: list[str] = []
+        workplace, origin = detect_workplace(job, self.cfg.workplace_from_description)
+        allowed = " ou ".join(WORKPLACE_LABELS[w].lower() for w in self.cfg.workplace_types)
+        if workplace and workplace not in self.cfg.workplace_types:
+            return self._no("workplace", f"é {WORKPLACE_LABELS[workplace].lower()} "
+                                         f"({origin}), procurando {allowed}")
+        if not workplace:
+            if self.cfg.unknown_workplace == "reject":
+                return self._no("workplace", "modalidade não informada")
+            if self.cfg.workplace_types != ["remote"]:
+                # em sites só de vagas remotas, "não informado" significa remoto
+                notes.append("Modalidade não informada; confira se é "
+                             f"{allowed} antes de se candidatar.")
+        elif origin == "indício":
+            notes.append(f"{WORKPLACE_LABELS[workplace]} segundo o filtro de busca da fonte, "
+                         "que nem sempre acerta; confira na vaga.")
 
         # 3. Área ----------------------------------------------------------
         if self.area_exclusions and (m := self.area_exclusions.search(title)):
@@ -272,25 +436,45 @@ class JobFilter:
         if m := self.junior.search(title):
             signal = f"título: '{m.group(0)}'"
         elif self.cfg.accept_roman_one and (m := _ROMAN_ONE.search(job.title)):
-            signal = f"título: '{m.group(0)}'"
+            signal = f"título: '{m.group(0).strip()}'"
         elif self.cfg.trust_source_seniority and source_level and _SOURCE_JUNIOR.search(source_level):
             signal = f"fonte: '{job.source_level}'"
         elif self.cfg.junior_marker_in_description and (m := _DESC_JUNIOR.search(description)):
             signal = f"descrição: '{m.group(0)}'"
         if not signal:
-            return self._no("junior_marker", "não é explicitamente júnior", area)
+            if self.cfg.require_junior_marker:
+                return self._no("junior_marker", "não é explicitamente júnior", area)
+            signal = "nível não informado"
+            notes.append("Nível não informado no título; confira se aceita júnior.")
 
-        # 8. Região --------------------------------------------------------
-        regions = classify_regions(job.location, self.cfg.accept_apac_as_au)
-        if regions == ["UNKNOWN"]:
-            if not self.cfg.allow_unknown_location:
-                return self._no("region", "localização não informada", area)
-            regions = ["NÃO INFORMADO"]
-        elif not set(regions) & set(self.cfg.accepted_regions):
-            return self._no("region", f"região fora do escopo ('{job.location}')", area)
+        # 8. Localização ---------------------------------------------------
+        if self.cities is not None:
+            status, label = self.cities.match(job.location)
+            if status == "city":
+                regions = [label]
+            elif status == "state" and self.cfg.accept_state_only:
+                regions = [f"{label} (cidade não informada)"]
+                notes.append("Só o estado foi informado; confira a cidade.")
+            elif status == "unknown" and self.cfg.allow_unknown_location:
+                regions = ["NÃO INFORMADO"]
+                notes.append("Localização não informada; confira.")
+            else:
+                where = f"'{job.location}'" if job.location else "não informada"
+                return self._no("region", f"localização fora do escopo ({where})", area)
+        else:
+            regions = classify_regions(job.location, self.cfg.accept_apac_as_au)
+            if regions == ["UNKNOWN"]:
+                if not self.cfg.allow_unknown_location:
+                    return self._no("region", "localização não informada", area)
+                regions = ["NÃO INFORMADO"]
+            elif not set(regions) & set(self.cfg.accepted_regions):
+                return self._no("region", f"região fora do escopo ('{job.location}')", area)
+            regions = [r for r in regions if r != "OTHER"]
 
+        if not workplace and self.cfg.workplace_types == ["remote"]:
+            workplace = "remote"
         return FilterDecision(True, "ok", "accepted", area=area, junior_signal=signal,
-                              regions=[r for r in regions if r != "OTHER"])
+                              regions=regions, workplace=workplace, notes=notes)
 
     # ------------------------------------------------------------------
     def apply(self, job: Job) -> FilterDecision:
@@ -300,7 +484,12 @@ class JobFilter:
             job.area = decision.area
             job.regions = decision.regions
             job.junior_signal = decision.junior_signal
-            if not job.timezone:
+            job.workplace = decision.workplace
+            for note in decision.notes:
+                job.add_note(note)
+            # Fusos só fazem sentido para vagas remotas internacionais; em
+            # português, "PT" (idioma) seria lido como Pacific Time.
+            if not job.timezone and self.cfg.location_mode == "regions":
                 job.timezone = extract_timezones(job.location, job.description)
         return decision
 

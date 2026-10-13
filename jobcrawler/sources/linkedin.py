@@ -8,7 +8,10 @@ de bloqueio a fonte é desativada até a próxima execução.
 Limitação: a busca guest não traz a descrição, então o filtro de anos de
 experiência não se aplica a vagas do LinkedIn (só título e localização).
 
-Parâmetros usados: f_WT=2 (remoto) e f_E=2 (nível "Entry level").
+Parâmetros (configuráveis): f_WT = modalidade (1 presencial, 2 remoto,
+3 híbrido) e f_E = nível (1 estágio, 2 "Assistente"/Entry level, 3 "Júnior"/
+Associate). O filtro de modalidade do LinkedIn falha com frequência, por isso
+ele vira só um indício (`workplace_hint`) e a vaga recebe aviso no relatório.
 """
 
 from __future__ import annotations
@@ -40,7 +43,10 @@ def _first(node, selectors: list[str]):
     return None
 
 
-def parse_cards(html: str) -> list[Job]:
+_WT_CODES = {1: "onsite", 2: "remote", 3: "hybrid"}
+
+
+def parse_cards(html: str, workplace_hint: str = "", level: str = "") -> list[Job]:
     soup = BeautifulSoup(html, "html.parser")
     cards = []
     for sel in SELECTORS["card"]:
@@ -63,7 +69,8 @@ def parse_cards(html: str) -> list[Job]:
             url=(link.get("href") or "").split("?")[0],
             location=clean_ws(location.get_text()) if location else "",
             published_at=parse_date(time_tag["datetime"]) if time_tag else None,
-            source_level="Entry level",   # garantido pelo filtro f_E=2 da busca
+            source_level=level,
+            workplace_hint=workplace_hint,
         ))
     if html.strip() and cards and not jobs:
         raise SchemaChangedError("cards encontrados mas nenhum campo extraído (DOM mudou?)")
@@ -77,15 +84,21 @@ class LinkedInSource(Source):
         result = SourceResult(self.name)
         delay = float(self.cfg.get("min_delay_seconds", 6))
         max_pages = int(self.cfg.get("max_pages", 2))
+        wt = [int(x) for x in self.cfg.get("workplace", [2])]
+        levels = [int(x) for x in self.cfg.get("experience_levels", [2])]
+        # Só dá para atribuir modalidade/nível às vagas quando a busca usa um único valor
+        hint = _WT_CODES.get(wt[0], "") if len(wt) == 1 else ""
+        level = "Entry level" if levels == [2] else ""
         for location in self.cfg.get("locations", ["United States"]):
             for keywords in self.cfg.get("keywords", []):
                 def run(kw=keywords, loc=location):
                     jobs: list[Job] = []
                     for page in range(max_pages):
-                        params = {"keywords": kw, "location": loc, "f_WT": 2, "f_E": 2,
+                        params = {"keywords": kw, "location": loc,
+                                  "f_WT": ",".join(map(str, wt)), "f_E": ",".join(map(str, levels)),
                                   "start": page * PAGE_SIZE}
                         html = self.http.get_text(SEARCH_URL, params=params, min_interval=delay)
-                        page_jobs = parse_cards(html)
+                        page_jobs = parse_cards(html, hint, level)
                         jobs += page_jobs
                         if len(page_jobs) < PAGE_SIZE:
                             break

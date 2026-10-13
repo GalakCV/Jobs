@@ -23,7 +23,8 @@ AREAS = [  # ordem de exibição na barra
 AREA_NAMES = dict(AREAS)
 REGION_NAMES = {"US": "EUA", "CA": "Canadá", "AU": "Austrália", "GLOBAL": "Global",
                 "NÃO INFORMADO": "Não informado"}
-REGION_ORDER = ["US", "CA", "AU", "GLOBAL", "NÃO INFORMADO"]
+REGION_ORDER = ["US", "CA", "AU", "GLOBAL"]
+WORKPLACE_NAMES = {"hybrid": "Híbrido", "onsite": "Presencial", "remote": "Remoto"}
 
 
 def _e(value) -> str:
@@ -37,8 +38,11 @@ def _safe_url(url: str) -> str:
 
 def _regions(rec: dict) -> list[str]:
     raw = rec.get("regions") or ""
-    items = raw if isinstance(raw, list) else [r.strip() for r in raw.split(",")]
-    return [r for r in items if r]
+    if isinstance(raw, list):
+        items = raw
+    else:  # " | " é o separador atual; "," fica para bancos antigos (US, CA)
+        items = raw.split("|") if "|" in raw else raw.split(",")
+    return [r.strip() for r in items if r.strip()]
 
 
 def _date_label(iso: str | None) -> str:
@@ -89,8 +93,8 @@ def _row(rec: dict) -> str:
                if excerpt else "")
 
     return f"""
-<li class="job" data-area="{_e(area)}" data-regions="{_e(' '.join(regions))}"
-    data-new="{'1' if is_new else '0'}" data-date="{_e(rec.get('published_at') or '')}"
+<li class="job" data-area="{_e(area)}" data-regions="{_e('|'.join(regions))}"
+    data-new="{'1' if is_new else '0'}" data-profile="{_e(rec.get('profile') or '')}" data-date="{_e(rec.get('published_at') or '')}"
     data-search="{_e(search)}">
   <div class="job-head">
     {title_html}
@@ -100,9 +104,12 @@ def _row(rec: dict) -> str:
   <div class="job-sub">
     <span class="company">{_e(rec.get('company'))}</span>
     <span class="area-name">{_e(AREA_NAMES.get(area, area))}</span>
+    {f'<span class="wp wp-{_e(rec.get("workplace"))}">{_e(WORKPLACE_NAMES[rec.get("workplace")])}</span>'
+     if rec.get("workplace") in WORKPLACE_NAMES else ''}
     {region_tags}
   </div>
   {'<div class="facts">' + ''.join(facts) + '</div>' if facts else ''}
+  {f'<p class="note">{_e(rec["note"])}</p>' if rec.get("note") else ''}
   <div class="job-foot">
     <span class="source">via {_e(rec.get('source'))}</span>
     {details}
@@ -126,6 +133,32 @@ def _area_bar(records: list[dict]) -> str:
             f'({len(records)} vagas no total)">{"".join(segs)}</div>')
 
 
+def _per_profile_line(meta: dict) -> str:
+    per = meta.get("per_profile") or {}
+    if len(per) < 2:
+        return ""
+    labels = meta.get("profiles") or {}
+    parts = ", ".join(f"{_e(labels.get(k, k))}: {v}" for k, v in per.items())
+    return f"<p>Aceitas por perfil: {parts}.</p>"
+
+
+def _profile_tabs(records: list[dict], labels: dict[str, str]) -> str:
+    """Seletor de perfil (só aparece com vagas de 2+ perfis)."""
+    counts: dict[str, int] = {}
+    for rec in records:
+        if rec.get("profile"):
+            counts[rec["profile"]] = counts.get(rec["profile"], 0) + 1
+    if len(counts) < 2:
+        return ""
+    order = [k for k in labels if k in counts] + sorted(k for k in counts if k not in labels)
+    tabs = [f'<button type="button" class="tab" role="radio" aria-checked="true" data-profile="">'
+            f'Todas <span class="n">{len(records)}</span></button>']
+    tabs += [f'<button type="button" class="tab" role="radio" aria-checked="false" '
+             f'data-profile="{_e(k)}">{_e(labels.get(k, k))} <span class="n">{counts[k]}</span></button>'
+             for k in order]
+    return f'<div class="tabs" role="radiogroup" aria-label="Perfil de busca">{"".join(tabs)}</div>'
+
+
 def _run_details(meta: dict) -> str:
     per_source = meta.get("per_source") or {}
     errors = meta.get("errors") or {}
@@ -138,16 +171,17 @@ def _run_details(meta: dict) -> str:
     err_items = "".join(f"<li><strong>{_e(src)}</strong>: {_e(msg)}</li>"
                         for src, msgs in errors.items() for msg in msgs)
     stages = meta.get("rejection_stages") or {}
-    stage_names = {"age": "antigas", "remote": "não remotas", "area": "fora da área",
+    stage_names = {"age": "antigas", "workplace": "modalidade", "remote": "não remotas", "area": "fora da área",
                    "seniority_title": "senioridade no título", "seniority_source": "nível da fonte",
                    "seniority_description": "nível na descrição", "experience": "anos de experiência",
-                   "junior_marker": "sem marcador júnior", "region": "região"}
+                   "junior_marker": "sem marcador júnior", "region": "localização"}
     stage_txt = ", ".join(f"{stage_names.get(k, k)}: {v}" for k, v in
                           sorted(stages.items(), key=lambda kv: -kv[1]))
     return f"""
 <details class="run">
   <summary>Detalhes da execução</summary>
   <p>Coletadas {meta.get('fetched', 0)} vagas, {meta.get('unique', 0)} únicas depois de remover duplicatas.</p>
+  {_per_profile_line(meta)}
   {f'<p>Descartadas por: {_e(stage_txt)}.</p>' if stage_txt else ''}
   <table><thead><tr><th>Fonte</th><th>Coletadas</th><th>Aceitas</th><th>Erros</th></tr></thead>
   <tbody>{rows}</tbody></table>
@@ -157,6 +191,8 @@ def _run_details(meta: dict) -> str:
 
 def render_html(records: list[dict], meta: dict | None = None) -> str:
     meta = meta or {}
+    texts = {"title": "Vagas encontradas", "scope": "", "footer": "Cada link abre a vaga na fonte original.",
+             **{k: v for k, v in (meta.get("report") or {}).items() if v}}
     records = sorted(records, key=lambda r: r.get("published_at") or "", reverse=True)
     n_new = sum(1 for r in records if r.get("is_new") in (True, "sim", 1))
     generated = meta.get("generated_at") or datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -169,30 +205,45 @@ def render_html(records: list[dict], meta: dict | None = None) -> str:
         word = "vaga" if len(records) == 1 else "vagas"
         new_txt = ("nenhuma nova desde a última execução" if n_new == 0
                    else f"{n_new} {'nova' if n_new == 1 else 'novas'} desde a última execução")
-        lede = f"{len(records)} {word} júnior remotas abertas, {new_txt}."
+        lede = f"{len(records)} {word} {'encontrada' if len(records) == 1 else 'encontradas'}, {new_txt}."
     else:
         lede = "Nenhuma vaga passou nos filtros desta vez."
 
-    present_regions = {r for rec in records for r in _regions(rec)}
+    # Chips de região/cidade: códigos conhecidos primeiro (US, CA...), depois as
+    # cidades por número de vagas, e "não informado" por último.
+    counts: dict[str, int] = {}
+    region_profiles: dict[str, set[str]] = {}
+    for rec in records:
+        for r in _regions(rec):
+            counts[r] = counts.get(r, 0) + 1
+            region_profiles.setdefault(r, set()).add(rec.get("profile") or "")
+    known: list[str] = []
+    others = sorted(counts, key=lambda r: (
+        r.startswith("NÃO INFORMADO") or "não informada" in r, -counts[r], r))
     region_buttons = "".join(
-        f'<button type="button" class="chip" data-region="{_e(r)}" aria-pressed="false">'
-        f'{_e(REGION_NAMES.get(r, r))}</button>'
-        for r in REGION_ORDER if r in present_regions)
+        f'<button type="button" class="chip" data-region="{_e(r)}" '
+        f'data-profiles="{_e("|".join(sorted(region_profiles[r])))}" aria-pressed="false">'
+        f'{_e(REGION_NAMES.get(r, r))} <span class="n">{counts[r]}</span></button>'
+        for r in known + others) if len(counts) > 1 else ""
 
     if records:
         body = f'<ol class="queue" id="queue">{"".join(_row(r) for r in records)}</ol>'
     else:
-        body = ('<div class="empty"><p>Nenhuma vaga júnior passou nos filtros nesta execução.</p>'
+        body = ('<div class="empty"><p>Nenhuma vaga passou nos filtros nesta execução.</p>'
                 '<p>Para ver por que cada vaga foi descartada, rode '
                 '<code>python -m jobcrawler run --explain</code> e abra '
                 '<code>output/rejections.csv</code>.</p></div>')
 
     return TEMPLATE.format(
         lede=_e(lede),
+        heading=_e(texts["title"]),
+        scope=_e(texts["scope"]),
+        footer=_e(texts["footer"]),
         generated=_e(gen_label),
         title_suffix=f" ({n_new} novas)" if n_new else "",
         area_bar=_area_bar(records),
         region_buttons=region_buttons,
+        profile_tabs=_profile_tabs(records, meta.get("profiles") or {}),
         toolbar_hidden="" if records else " hidden",
         body=body,
         run_details=_run_details(meta),
@@ -214,7 +265,7 @@ TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vagas júnior remotas{title_suffix}</title>
+<title>{heading}{title_suffix}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -231,6 +282,8 @@ TEMPLATE = """<!doctype html>
   --infra: #A8620C;
   --new-bg: #16213A;
   --new-ink: #FFFFFF;
+  --note-bg: #FFF3D6;
+  --note-ink: #5C3B00;
   color-scheme: light;
 }}
 @media (prefers-color-scheme: dark) {{
@@ -246,6 +299,8 @@ TEMPLATE = """<!doctype html>
     --infra: #E7A24A;
     --new-bg: #E6ECF5;
     --new-ink: #0F1A2E;
+    --note-bg: #3A2E14;
+    --note-ink: #F5D99A;
     color-scheme: dark;
   }}
 }}
@@ -261,10 +316,19 @@ header h1 {{ font-size: 2rem; line-height: 1.15; margin: 0 0 8px; letter-spacing
 .lede {{ font-size: 1.125rem; margin: 0 0 4px; max-width: 60ch; }}
 .stamp {{ color: var(--muted); margin: 0 0 28px; font-size: .9375rem; }}
 
+/* Seletor de perfil (Todas / Híbridas no Rio / Remotas no exterior) */
+.tabs {{ display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); padding: 3px; gap: 3px; margin-bottom: 16px; }}
+.tab {{ font: inherit; font-weight: 700; color: var(--ink); background: none; border: 0;
+  border-radius: 4px; padding: 8px 14px; cursor: pointer; }}
+.tab .n {{ color: var(--muted); font-weight: 400; margin-left: 2px; }}
+.tab[aria-checked="true"] {{ background: var(--ink); color: var(--paper); }}
+.tab[aria-checked="true"] .n {{ color: inherit; }}
+
 /* Barra de áreas: proporção + filtro */
 .areabar {{ display: flex; gap: 3px; height: 56px; margin-bottom: 20px; }}
 .seg {{
-  flex-basis: 0; min-width: 120px; border: 0; border-radius: 4px; cursor: pointer;
+  flex-basis: 0; min-width: 160px; white-space: nowrap; border: 0; border-radius: 4px; cursor: pointer;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 0 14px; color: #fff; font: inherit; font-weight: 700; text-align: left;
   transition: opacity .15s;
@@ -279,7 +343,7 @@ header h1 {{ font-size: 2rem; line-height: 1.15; margin: 0 0 8px; letter-spacing
 /* Barra de ferramentas */
 .toolbar {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }}
 .search {{
-  flex: 1 1 260px; font: inherit; color: var(--ink); background: var(--surface);
+  flex: 1 1 100%; font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--line); border-radius: 6px; padding: 9px 12px;
 }}
 .chips {{ display: flex; flex-wrap: wrap; gap: 6px; }}
@@ -314,14 +378,19 @@ a.title:hover {{ text-decoration: underline; text-underline-offset: 3px; }}
 .job-sub {{ display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 2px; }}
 .company {{ font-weight: 700; }}
 .area-name {{ color: var(--muted); }}
+.wp {{ font-size: .8125rem; font-weight: 700; color: var(--ink); }}
+.chip .n {{ color: var(--muted); font-size: .8125rem; }}
+.chip[aria-pressed="true"] .n {{ color: inherit; }}
 .region {{ font-size: .8125rem; border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; }}
 .facts {{ display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; font-size: .9375rem; }}
 .k {{ color: var(--muted); }}
+.note {{ margin: 8px 0 0; padding: 6px 10px; font-size: .9375rem; max-width: 72ch;
+  background: var(--note-bg); color: var(--note-ink); border-radius: 4px; }}
 .job-foot {{ display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; margin-top: 8px;
   font-size: .875rem; color: var(--muted); }}
 .excerpt summary {{ cursor: pointer; color: var(--focus); }}
 .excerpt p {{ color: var(--ink); max-width: 72ch; margin: 6px 0 0; font-size: .9375rem; }}
-.job[hidden] {{ display: none; }}
+.job[hidden], .seg[hidden], .chip[hidden] {{ display: none; }}
 
 .empty {{ background: var(--surface); border: 1px dashed var(--line); border-radius: 6px; padding: 24px; }}
 .empty p {{ margin: 0 0 8px; max-width: 64ch; }}
@@ -348,16 +417,18 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
 <body>
 <div class="wrap">
   <header>
-    <h1>Vagas júnior remotas</h1>
+    <h1>{heading}</h1>
     <p class="lede">{lede}</p>
-    <p class="stamp">Gerado em {generated}. DevOps, Segurança e Infra em EUA, Canadá, Austrália e vagas globais.</p>
+    <p class="stamp">Gerado em {generated}. {scope}</p>
   </header>
+
+  {profile_tabs}
 
   {area_bar}
 
   <div class="toolbar"{toolbar_hidden}>
     <input class="search" id="q" type="search" placeholder="Buscar por cargo, empresa, tecnologia…" aria-label="Buscar vagas">
-    <div class="chips" role="group" aria-label="Filtrar por região">{region_buttons}</div>
+    <div class="chips" role="group" aria-label="Filtrar por local">{region_buttons}</div>
     <button type="button" class="toggle" id="only-new" aria-pressed="false">Só novas</button>
     <select id="sort" aria-label="Ordenar">
       <option value="desc">Mais recentes primeiro</option>
@@ -370,11 +441,7 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
 
   {run_details}
 
-  <footer>
-    Cada link abre a vaga na fonte original. Vagas restritas a EUA, Canadá ou Austrália
-    costumam exigir autorização de trabalho no país; as marcadas como Global tendem a ser as mais viáveis
-    a partir do Brasil.
-  </footer>
+  <footer>{footer}</footer>
 </div>
 
 <script>
@@ -389,6 +456,29 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
   var areabar = document.querySelector(".areabar");
   var areaBtns = Array.prototype.slice.call(document.querySelectorAll(".seg"));
   var regionBtns = Array.prototype.slice.call(document.querySelectorAll(".chip"));
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+  var currentProfile = "";
+
+  function selectProfile(key) {{
+    currentProfile = key;
+    tabs.forEach(function (t) {{ t.setAttribute("aria-checked", t.dataset.profile === key ? "true" : "false"); }});
+    // esconde cidades/países que não existem no perfil escolhido
+    regionBtns.forEach(function (b) {{
+      var ok = !key || b.dataset.profiles.split("|").indexOf(key) !== -1;
+      b.hidden = !ok;
+      if (!ok) b.setAttribute("aria-pressed", "false");
+    }});
+    // barra de áreas passa a contar só as vagas do perfil
+    areaBtns.forEach(function (b) {{
+      var n = jobs.filter(function (li) {{
+        return li.dataset.area === b.dataset.area && (!key || li.dataset.profile === key);
+      }}).length;
+      b.hidden = n === 0;
+      b.style.flexGrow = n;
+      b.querySelector(".seg-n").textContent = n;
+      if (n === 0) b.setAttribute("aria-pressed", "false");
+    }});
+  }}
 
   function fold(s) {{
     return (s || "").normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
@@ -423,15 +513,16 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
     var shown = 0;
     jobs.forEach(function (li) {{
       var hay = li.dataset.search;
-      var jobRegions = li.dataset.regions.split(" ");
+      var jobRegions = li.dataset.regions.split("|");
       var ok = terms.every(function (t) {{ return hay.indexOf(t) !== -1; }})
         && (!areas.length || areas.indexOf(li.dataset.area) !== -1)
         && (!regions.length || regions.some(function (r) {{ return jobRegions.indexOf(r) !== -1; }}))
+        && (!currentProfile || li.dataset.profile === currentProfile)
         && (!newOnly || li.dataset.new === "1");
       li.hidden = !ok;
       if (ok) shown++;
     }});
-    var filtered = terms.length || areas.length || regions.length || newOnly;
+    var filtered = terms.length || areas.length || regions.length || newOnly || currentProfile;
     count.textContent = "";
     if (filtered) {{
       count.append(shown === 0 ? "Nenhuma vaga com esses filtros." :
@@ -441,6 +532,7 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
       clear.onclick = function () {{
         q.value = "";
         areaBtns.concat(regionBtns, [onlyNew]).forEach(function (b) {{ b.setAttribute("aria-pressed", "false"); }});
+        selectProfile("");
         apply(); q.focus();
       }};
       count.append(clear);
@@ -459,6 +551,7 @@ footer {{ margin-top: 24px; color: var(--muted); font-size: .875rem; max-width: 
   onlyNew.addEventListener("click", function () {{ toggle(onlyNew); }});
   areaBtns.forEach(function (b) {{ b.addEventListener("click", function () {{ toggle(b); }}); }});
   regionBtns.forEach(function (b) {{ b.addEventListener("click", function () {{ toggle(b); }}); }});
+  tabs.forEach(function (t) {{ t.addEventListener("click", function () {{ selectProfile(t.dataset.profile); apply(); }}); }});
   sort.addEventListener("change", resort);
   apply();
 }})();

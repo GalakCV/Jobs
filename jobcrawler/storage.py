@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     timezone      TEXT,
     area          TEXT,
     junior_signal TEXT,
+    note          TEXT,
+    workplace     TEXT,
+    profile       TEXT,
     source_level  TEXT,
     tags          TEXT,
     salary        TEXT,
@@ -66,6 +69,14 @@ class JobStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
+            # Migração: bancos criados antes destas colunas existirem
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+            for column in ("note", "workplace", "profile"):
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
+            if "profile" not in columns:
+                # Antes dos perfis, o crawler só buscava vagas remotas.
+                conn.execute("UPDATE jobs SET profile = 'remoto' WHERE profile IS NULL")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -97,10 +108,10 @@ class JobStore:
                     continue
                 conn.execute(
                     """INSERT INTO jobs (fingerprint, title, company, url, source, sources,
-                           location, regions, timezone, area, junior_signal, source_level,
+                           location, regions, timezone, area, junior_signal, note, workplace, profile, source_level,
                            tags, salary, published_at, description, first_seen, last_seen)
                        VALUES (:fingerprint, :title, :company, :url, :source, :sources,
-                           :location, :regions, :timezone, :area, :junior_signal, :source_level,
+                           :location, :regions, :timezone, :area, :junior_signal, :note, :workplace, :profile, :source_level,
                            :tags, :salary, :published_at, :description, :first_seen, :last_seen)""",
                     {**rec, "sources": json.dumps([job.source]), "first_seen": now, "last_seen": now},
                 )
