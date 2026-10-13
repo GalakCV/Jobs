@@ -16,11 +16,11 @@ def rec(**kw):
 def test_renders_jobs_and_summary():
     html = render_html([rec(), rec(title="Junior Security Analyst", area="security",
                                    regions="GLOBAL", is_new="não", url="https://example.com/2")])
-    assert "2 vagas júnior remotas abertas, 1 nova desde a última execução." in html
+    assert "2 vagas encontradas, 1 nova desde a última execução." in html
     assert 'href="https://example.com/1"' in html and "Junior Security Analyst" in html
     assert 'data-area="security"' in html and 'data-regions="GLOBAL"' in html
     assert 'class="new">Nova<' in html and "Global" in html
-    assert "<title>Vagas júnior remotas (1 novas)</title>" in html
+    assert "<title>Vagas encontradas (1 novas)</title>" in html
     assert "“junior” no título" in html
 
 
@@ -60,4 +60,25 @@ def test_run_details_list_errors():
                                  "errors": {"himalayas": ["HTTP 429 <script>"]},
                                  "rejection_stages": {"region": 4, "seniority_title": 3}})
     assert "Coletadas 10 vagas, 8 únicas" in html
-    assert "região: 4" in html and "HTTP 429 &lt;script&gt;" in html
+    assert "localização: 4" in html and "HTTP 429 &lt;script&gt;" in html
+
+
+def test_report_texts_come_from_config():
+    html = render_html([rec()], {"report": {"title": "Vagas híbridas no Rio",
+                                            "scope": "Segurança, DevOps e Infra.",
+                                            "footer": "Rodapé <b>configurável</b>"}})
+    assert "<h1>Vagas híbridas no Rio</h1>" in html and "Segurança, DevOps e Infra." in html
+    assert "Rodapé &lt;b&gt;configurável&lt;/b&gt;" in html
+
+
+def test_city_chips_and_workplace_badge():
+    html = render_html([
+        rec(regions="Rio de Janeiro", workplace="hybrid"),
+        rec(regions="Niterói", workplace="hybrid", url="https://example.com/2"),
+        rec(regions="Rio de Janeiro", url="https://example.com/3"),
+    ])
+    assert 'data-region="Rio de Janeiro"' in html and 'data-region="Niterói"' in html
+    assert 'data-regions="Rio de Janeiro"' in html     # separador "|" preserva espaços
+    assert 'class="wp wp-hybrid">Híbrido<' in html
+    # cidade com mais vagas aparece primeiro
+    assert html.index('data-region="Rio de Janeiro"') < html.index('data-region="Niterói"')

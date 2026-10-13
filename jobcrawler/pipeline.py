@@ -123,6 +123,7 @@ def run(cfg: dict, *, only: list[str] | None = None, dry_run: bool = False,
         "per_source": summary.per_source,
         "errors": summary.errors,
         "rejection_stages": dict(summary.rejection_stages),
+        "report": cfg.get("report") or {},
     }
     summary.files = export(summary.accepted, summary.new, storage_cfg["output_dir"],
                            storage_cfg.get("export_formats", ["html", "json", "csv"]), meta)

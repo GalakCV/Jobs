@@ -1,10 +1,13 @@
 # =============================================================================
-# Configuração do crawler de vagas remotas JÚNIOR (DevOps / Security / Infra)
+# PERFIL RIO: vagas HÍBRIDAS júnior de Segurança, DevOps e Infra no Rio de Janeiro.
+# Uso: python -m jobcrawler run --open
+# (para o perfil antigo de vagas remotas: -c config.remoto.yaml)
 #
 # Todos os termos abaixo são fragmentos de REGEX aplicados sobre texto
-# normalizado: minúsculo e SEM acentos ("Sênior" vira "senior", "Estágio"
-# vira "estagio"). Limites de palavra são adicionados automaticamente, então
-# "sr" NÃO casa com "sre", e "intern" NÃO casa com "internal".
+# normalizado: minúsculo e SEM acentos ("Sênior" vira "senior", "Segurança"
+# vira "seguranca"). Limites de palavra são adicionados automaticamente, então
+# "sr" NÃO casa com "sre" e "pl" NÃO casa com "pl/sql".
+# Termo com ": " (dois-pontos e espaço) precisa de aspas no YAML.
 # =============================================================================
 
 storage:
@@ -26,55 +29,126 @@ http:
   cache_dir: .cache/http
 
 # -----------------------------------------------------------------------------
-# Fontes. Cada uma pode ser ligada/desligada. Todas, exceto LinkedIn, são APIs
-# ou feeds públicos oficiais que pedem atribuição: o link salvo de cada vaga
-# aponta para a fonte original.
+# Fontes
 # -----------------------------------------------------------------------------
 sources:
-  himalayas:
+  # Gupy: principal ATS do Brasil (Globo, Stone, Vale, bancos, varejo...).
+  # A API pública do portal informa cidade, estado e modalidade (workplaceType),
+  # então a modalidade das vagas do Gupy é confiável.
+  gupy:
     enabled: true
-    seniority: Entry-level          # filtro do próprio Himalayas
-    max_pages: 3
-    queries: [devops, "site reliability", "platform engineer", security,
-              "soc analyst", cybersecurity, cloud, "system administrator",
-              infrastructure, "it support"]
+    page_size: 50
+    max_pages: 4                    # por termo de busca
+    queries:
+      - devops
+      - sre
+      - cloud
+      - infraestrutura
+      - "analista de infra"
+      - redes
+      - linux
+      - "suporte de ti"
+      - "suporte técnico"
+      - "segurança da informação"
+      - cibersegurança
+      - soc
+      - "analista de segurança"
+    # Parâmetros extras repassados à API (ex.: {state: RJ}). Deixe vazio: a
+    # filtragem por cidade é feita aqui, e um parâmetro errado pode zerar a busca.
+    extra_params: {}
 
-  jobicy:
+  # Repositórios de vagas no GitHub (issues). O backend-br/vagas usa labels
+  # como "Híbrido", "Júnior" e "Estagiário". Sem token, a API do GitHub
+  # permite 60 requisições/hora; com GITHUB_TOKEN no .env, 5000.
+  github_issues:
     enabled: true
-    industries: [admin, cybersecurity, technical-support]   # admin = DevOps & Infra
-    count: 100
-    max_pages: 3
+    repos: [backend-br/vagas]
+    max_pages: 3                    # 100 issues por página
 
-  remotive:
-    enabled: true
-    categories: [devops]
-    searches: [junior, "entry level", security]
-    # O Remotive pede poucas chamadas por dia: o cache acima já ajuda.
-
-  remoteok:
-    enabled: true
-    tags: [devops, sysadmin, security, infosec, cloud]
-
-  weworkremotely:
-    enabled: true
-    feeds:
-      - https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss
-      - https://weworkremotely.com/remote-jobs.rss
-
+  # LinkedIn (busca pública de visitante). DESLIGADO por padrão: os Termos do
+  # LinkedIn proíbem coleta automatizada e o site responde HTTP 429 depois de
+  # poucas consultas. O filtro de modalidade da busca nem sempre acerta, então
+  # as vagas vêm com aviso "confira na vaga".
   linkedin:
-    # DESLIGADO por padrão: os Termos do LinkedIn proíbem scraping e o site
-    # bloqueia IPs com frequência. Use por sua conta e risco, em baixo volume.
     enabled: false
-    keywords: ["junior devops", "junior security analyst", "junior cloud engineer",
-               "entry level soc analyst", "junior system administrator"]
-    locations: ["United States", "Canada", "Australia"]
-    max_pages: 2
+    keywords: ["devops", "segurança da informação", "analista de infraestrutura",
+               "cloud", "soc analista", "suporte de ti"]
+    locations: ["Rio de Janeiro, Rio de Janeiro, Brasil"]
+    workplace: [3]                  # 1 presencial, 2 remoto, 3 híbrido
+    experience_levels: [2, 3]       # 2 = Assistente, 3 = Júnior (rótulos do LinkedIn em PT)
+    max_pages: 1
     min_delay_seconds: 6
+
+  # Fontes internacionais de vagas remotas: só fazem sentido no
+  # config.remoto.yaml. Aqui ficam desligadas.
+  himalayas: {enabled: false}
+  jobicy: {enabled: false}
+  remotive: {enabled: false}
+  remoteok: {enabled: false}
+  weworkremotely: {enabled: false}
 
 # -----------------------------------------------------------------------------
 # Motor de filtragem
 # -----------------------------------------------------------------------------
 filters:
+  # ---- Modalidade ----
+  workplace_types: [hybrid]         # hybrid | onsite | remote (pode combinar)
+  # Vaga sem modalidade informada: keep = entra com aviso; reject = descarta.
+  unknown_workplace: keep
+  # Procura "modelo híbrido", "3x por semana no escritório"... na descrição
+  # quando a fonte não tem um campo de modalidade.
+  workplace_from_description: true
+
+  # ---- Localização ----
+  location_mode: cities
+  target_cities:
+    # Cidade-alvo e apelidos/bairros que aparecem no lugar do nome da cidade.
+    "Rio de Janeiro":
+      - rio
+      - barra da tijuca
+      - recreio dos bandeirantes
+      - centro do rio
+      - botafogo
+      - copacabana
+      - ipanema
+      - leblon
+      - flamengo
+      - tijuca
+      - meier
+      - jacarepagua
+      - sao cristovao
+      - ilha do fundao
+      - ilha do governador
+      - cidade nova
+      - porto maravilha
+      - campo grande
+  # Região metropolitana (entra se include_metro: true; dá para filtrar por
+  # cidade no relatório).
+  include_metro: true
+  metro_cities:
+    - Niterói
+    - São Gonçalo
+    - Duque de Caxias
+    - Nova Iguaçu
+    - Belford Roxo
+    - São João de Meriti
+    - Nilópolis
+    - Mesquita
+    - Queimados
+    - Itaboraí
+    - Maricá
+    - Itaguaí
+    - Seropédica
+    - Magé
+  target_state:
+    label: RJ
+    names: [rj, rio de janeiro, estado do rio de janeiro]
+  accept_state_only: true           # "[RJ]" sem cidade entra com aviso
+  allow_unknown_location: false     # sem localização nenhuma: descarta
+
+  # Ignora vagas mais antigas que N dias (0 = sem limite).
+  max_age_days: 30
+
   # ---- Áreas (whitelist, aplicada ao TÍTULO). A primeira que casar vence. ----
   areas:
     security:
@@ -82,76 +156,99 @@ filters:
       - cyber ?security
       - cyber
       - secops
-      - sec ops
       - devsecops
       - appsec
       - application security
       - soc
       - infosec
       - information security
+      - seguranca
+      - ciberseguranca
+      - seguranca (?:da informacao|cibernetica|de redes|ofensiva|defensiva)
       - iam
+      - gestao de (?:acessos|identidades|vulnerabilidades)
       - identity (?:and|&) access
-      - vulnerability
+      - vulnerabilit\w*
+      - vulnerabilidades?
       - penetration test\w*
       - pentest\w*
       - threat
+      - resposta a incidentes
       - incident response
-      - detection engineer\w*
-      - "seguranca(?: da informacao| cibernetica)?"   # aspas: ": " confunde o YAML
-      - ciberseguranca
+      - grc
     devops_sre_platform:
       - devops
       - dev ops
       - sre
       - site reliability
+      - confiabilidade
       - platform engineer\w*
-      - platform ops
+      - engenheir[oa] de plataforma
       - kubernetes
       - k8s
       - ci ?/ ?cd
-      - release engineer
-      - build engineer
+      - observabilidade
       - observability
+      - release engineer
     infra_cloud_sysadmin:
+      - infraestrutura
+      - infra
       - infrastructure
       - cloud
+      - nuvem
       - sysadmin
       - sys admin
+      - administrador de (?:sistemas|redes|servidores)
       - systems? admin\w*
-      - systems? engineer
       - linux
-      - windows (?:server )?admin\w*
-      - network (?:engineer|admin\w*|technician|analyst)
-      - it operations
-      - it ops
-      - it support
-      - it technician
-      - desktop support
-      - noc
+      - windows server
+      - redes
+      - network\w*
+      - telecom\w*
+      - datacenter
       - data ?cent(?:er|re)
-      - virtuali[sz]ation
-      - infraestrutura
-      - nuvem
-      - administrador de (?:sistemas|redes)
+      - noc
+      - virtualizacao
       - suporte de ti
-      # Descomente se quiser incluir suporte de primeiro nível:
+      - suporte tecnico
+      - suporte de infraestrutura
+      - analista de suporte
+      - tecnico de (?:ti|informatica|suporte|redes)
+      - it support
+      - it operations
+      # Descomente se quiser incluir atendimento de primeiro nível:
       # - help ?desk
-      # - service desk
+      # - service ?desk
 
-  # Títulos que casam com uma área mas não são da área (ex.: "Cloud Sales").
+  # Títulos que casam com uma área mas não são da área.
   title_area_exclusions:
+    - seguranca do trabalho
+    - seguranca patrimonial
+    - seguranca eletronica
+    - seguranca empresarial
+    - seguranca privada
+    - vigilante
+    - tecnico de seguranca
+    - redes sociais
+    - social media
+    - infraestrutura (?:civil|predial|urbana|de obras)
+    - obras
+    - engenheir[oa] civil
+    - eletricista
+    - manutencao predial
+    - comercial
+    - vendas
     - sales
-    - account (?:executive|manager)
     - marketing
+    - recrutamento
     - recruit\w*
-    - talent acquisition
+    - account (?:executive|manager)
+    - atendimento ao cliente
+    - customer success
     - designer
     - product (?:manager|owner)
-    - business development
-    - copywriter
-    - accountant
-    - customer success
-    - solutions? consultant
+    - juridico
+    - contab\w*
 
   # ---- Senioridade ----
   # Marcadores que tornam a vaga "explicitamente júnior" (procurados no TÍTULO).
@@ -160,106 +257,94 @@ filters:
     - jr\.?
     - entry[- ]?level
     - associate
-    - early[- ]career
-    - new[- ]grad\w*
-    - graduate
+    - assistente
+    - nivel (?:1|i)
+    - n1
     - tier ?(?:1|i)
     - level ?(?:1|i)
     - l1
-  # Também aceita "Engineer I", "Analyst I" (romano I maiúsculo) no título.
+    - early[- ]career
+  # Também aceita "Analista de Infraestrutura I", "Engineer I" (romano I) no título.
   accept_roman_one: true
+  # true  = só entra vaga com marcador júnior explícito (regra rígida).
+  # false = vagas SEM nível no título também entram, com aviso. No Brasil
+  #         muitas vagas júnior vêm só como "Analista de Infraestrutura".
+  require_junior_marker: true
 
   # BLACKLIST: qualquer termo destes no TÍTULO descarta a vaga imediatamente.
   seniority_blacklist:
-    # estágio / trainee
+    # estágio / trainee / aprendiz
+    - estagi\w*
     - intern
     - interns
     - internship
     - trainee
-    - estagi\w*
+    - aprendiz
+    - jovem aprendiz
     - apprentice\w*
-    - co-?op
     # pleno / intermediário
     - pleno
+    - pl(?!/)
     - mid
     - mid[- ]?level
-    - mid[- ]?senior
-    - midweight
     - intermediate
     - ii
     - iii
     - iv
+    - nivel (?:2|3|ii|iii)
+    - n2
+    - n3
     - tier ?(?:2|3|ii|iii)
     - level ?(?:2|3|ii|iii)
     - l2
     - l3
-    - (?:engineer|analyst|administrator|developer|specialist) (?:2|3|4)
     # sênior e acima
     - senior
     - sr\.?
-    - snr
+    - especialista
+    - specialist
     - lead
-    - leader
+    - lider
+    - tech lead
     - principal
     - staff
+    - coordenador\w*
+    - supervisor\w*
+    - gerente
     - manager
     - head
+    - diretor\w*
     - director
+    - arquitet\w*
     - architect
-    - vp
-    - vice president
-    - chief
-    - cto
-    - ciso
-    - expert
     - experienced
 
-  # Como tratar a DESCRIÇÃO:
-  #   smart  (padrão) - descarta por frases que descrevem o NÍVEL da vaga
-  #                     ("this is a senior role", "internship", "mid-level
-  #                     position") e por anos de experiência exigidos.
-  #   strict           - descarta se QUALQUER termo da blacklist aparecer em
-  #                     qualquer lugar da descrição. Fiel à regra literal, mas
-  #                     derruba quase tudo ("you'll report to the manager",
-  #                     "work with senior engineers", "lead incident response").
+  # Descrição: "smart" descarta por frases que descrevem o nível da vaga e por
+  # anos de experiência; "strict" descarta por qualquer termo da blacklist.
   description_mode: smart
-
   # Descarta se a vaga exigir MAIS que isto de experiência (anos mínimos).
-  # 2 => vagas pedindo 3+ anos são descartadas.
   max_years_experience: 2
-
-  # Frases na descrição que descartam no modo smart.
   description_reject_phrases:
-    - internship
-    - intern (?:position|role|program\w*)
-    - summer intern\w*
-    - trainee program\w*
+    - vaga (?:de |para )?(?:pleno|senior|especialista)
+    - nivel (?:pleno|senior|especialista)
     - programa de (?:estagio|trainee)
     - vaga de estagio
-    - this is an? (?:paid |unpaid )?intern\w*
-    - this is an? (?:senior|mid[- ]level|lead|principal|staff)\b
-    - (?:senior|mid)[- ]level (?:role|position|opportunity|engineer|candidate)
-    - (?:seeking|looking for|hiring) an? (?:experienced|seasoned|senior)
-    - nivel (?:pleno|senior)
-    - vaga (?:pleno|senior)
-
-  # Se true, frases como "this is a junior position" na DESCRIÇÃO também
-  # contam como marcador júnior. Padrão false = só título/fonte (mais rígido).
+    - (?:senior|mid)[- ]level (?:role|position)
+    - this is an? (?:senior|mid[- ]level|lead) (?:role|position)
   junior_marker_in_description: false
-
-  # Usa o nível informado pela própria fonte (Himalayas "Entry-level",
-  # Jobicy "Junior") como marcador júnior quando o título não diz nada.
-  # Se a fonte disser "Mid-level"/"Senior", a vaga é descartada de qualquer jeito.
+  # Usa o nível informado pela fonte (labels do GitHub, tipo de vaga do Gupy).
+  # "Estágio", "Trainee", "Pleno"... informados pela fonte sempre descartam.
   trust_source_seniority: true
 
-  # ---- Localização ----
-  accepted_regions: [US, CA, AU, GLOBAL]
-  accept_apac_as_au: true          # "APAC" inclui Austrália
-  allow_unknown_location: true     # vaga sem localização informada passa (marcada)
-  reject_onsite_terms: ["hybrid", "on[- ]?site", "in[- ]office", "presencial", "hibrido"]
-
-  # Ignora vagas mais antigas que N dias (0 = sem limite).
-  max_age_days: 30
+# -----------------------------------------------------------------------------
+# Relatório HTML
+# -----------------------------------------------------------------------------
+report:
+  title: Vagas híbridas no Rio
+  scope: Segurança, DevOps e Infra, nível júnior, no Rio de Janeiro e região metropolitana.
+  footer: >-
+    Cada link abre a vaga na fonte original. Vagas com aviso amarelo têm algo a conferir
+    (modalidade, cidade ou nível) antes de você se candidatar.
 
 # -----------------------------------------------------------------------------
 # Notificações (credenciais vêm do arquivo .env)

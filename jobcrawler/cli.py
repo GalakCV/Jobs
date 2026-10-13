@@ -75,7 +75,8 @@ def _cmd_report(args, cfg) -> int:
     for r in rows:
         r["is_new"] = (r.get("first_seen") or "") >= cutoff
     out = Path(args.output) if args.output else Path(cfg["storage"]["output_dir"]) / "report.html"
-    write_html(out, rows, {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    write_html(out, rows, {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                           "report": cfg.get("report") or {}})
     print(f"{len(rows)} vaga(s) dos últimos {args.days} dia(s) em {out}")
     if args.open:
         _open_in_browser(out)
@@ -99,7 +100,8 @@ def _cmd_import(args, cfg) -> int:
         kw = {k: v for k, v in item.items() if k in fields}
         for key in ("tags", "regions"):
             if isinstance(kw.get(key), str):
-                kw[key] = [x.strip() for x in kw[key].split(",") if x.strip()]
+                sep = "|" if key == "regions" else ","
+                kw[key] = [x.strip() for x in kw[key].split(sep) if x.strip()]
         try:
             job = Job(**kw)
         except TypeError:
@@ -148,12 +150,18 @@ def _cmd_check(args, cfg) -> int:
 
     description = Path(args.description_file).read_text(encoding="utf-8") if args.description_file else ""
     job = Job(source="manual", title=args.title, company="Teste", url="https://example.com",
-              location=args.location, description=description, source_level=args.level)
+              location=args.location, description=description, source_level=args.level,
+              workplace=args.workplace)
     decision = JobFilter(FilterConfig.from_dict(cfg["filters"])).evaluate(job)
     status = "ACEITA" if decision.accepted else "DESCARTADA"
     print(f"{status} | etapa: {decision.stage} | motivo: {decision.reason}")
     if decision.accepted:
-        print(f"área: {decision.area} | júnior por: {decision.junior_signal} | regiões: {decision.regions}")
+        from jobcrawler.filters import WORKPLACE_LABELS
+        print(f"área: {decision.area} | júnior por: {decision.junior_signal} | "
+              f"local: {', '.join(decision.regions)} | "
+              f"modalidade: {WORKPLACE_LABELS.get(decision.workplace, 'não informada')}")
+        for note in decision.notes:
+            print(f"aviso: {note}")
     return 0 if decision.accepted else 1
 
 
@@ -197,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument("title")
     p_check.add_argument("--location", default="")
     p_check.add_argument("--level", default="", help="senioridade declarada pela fonte")
+    p_check.add_argument("--workplace", default="", help="modalidade da fonte: hybrid, onsite, remote")
     p_check.add_argument("--description-file", help="arquivo .txt com a descrição")
     p_check.set_defaults(func=_cmd_check)
     return parser
